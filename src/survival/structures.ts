@@ -2,7 +2,7 @@
 // station detection, storage transfers, and shallow-water spearfishing.
 // Pure domain logic (no Three.js or React imports).
 
-import { BASE_BUILDING, NEEDS, TEMPERATURE, WORLD } from './config.ts';
+import { BASE_BUILDING, FORGE_TUNING, NEEDS, TEMPERATURE, WORLD } from './config.ts';
 import {
   addItem,
   countItem,
@@ -13,6 +13,7 @@ import {
 } from './items.ts';
 import type {
   CraftStation,
+  ForgeQueueState,
   InventorySlot,
   ItemId,
   PlacedStructure,
@@ -167,7 +168,8 @@ export const STRUCTURE_CATALOG: Record<StructureType, StructureDef> = {
     ],
     unlockAct: 1,
     station: 'forge',
-    description: 'High-heat kiln unlocking Tier 3 smelting of scrap metal into Alloy Ingots.',
+    description:
+      'High-heat kiln: insert Timber Logs or Fallen Branches to cure Driftwood over time, and smelt Alloy Ingots.',
   },
 };
 
@@ -292,6 +294,9 @@ export function placeStructure(
       ? { trapState: 'set', trapProgress: 0 }
       : {}),
     ...(type === 'drying_rack' ? { dryItem: null, dryProgress: 0 } : {}),
+    ...(type === 'forge'
+      ? { forgeQueue: { inputWood: 0, progressSec: 0, outputDriftwood: 0 } }
+      : {}),
   };
 
   return {
@@ -400,13 +405,35 @@ export function getStructureInteractionPrompt(
         subtext: 'Unlocks Hewn Planks, Brush Machete & Steel Tools nearby',
         canInteract: true,
       };
-    case 'forge':
+    case 'forge': {
+      const fq = getForgeQueue(s);
+      if (fq.outputDriftwood > 0) {
+        return {
+          label: `Stone Charcoal Forge (${fq.outputDriftwood} Driftwood ready)`,
+          prompt: '[E / Click] Open Forge to Collect Driftwood or Add Wood',
+          subtext:
+            fq.inputWood > 0
+              ? `Kiln burning (${fq.inputWood} wood queued)`
+              : 'Insert Timber Logs or Fallen Branches to cure Driftwood',
+          canInteract: true,
+        };
+      }
+      if (fq.inputWood > 0) {
+        const pct = Math.min(99, Math.round((fq.progressSec / FORGE_TUNING.WOOD_TO_DRIFTWOOD_SEC) * 100));
+        return {
+          label: `Stone Charcoal Forge (${pct}%)`,
+          prompt: '[E / Click] Open Forge (Kiln Active)',
+          subtext: `Processing ${fq.inputWood} wood into Driftwood`,
+          canInteract: true,
+        };
+      }
       return {
         label: 'Stone Charcoal Forge',
-        prompt: '[E / Click] Open Tier 3 Smelting Forge',
-        subtext: 'Smelt Scrap Metal into Forged Alloy Ingots',
+        prompt: '[E / Click] Open Forge (Wood -> Driftwood & Smelting)',
+        subtext: 'Put Timber Logs or Fallen Branches in to cure Driftwood',
         canInteract: true,
       };
+    }
     case 'storage_chest': {
       const used = (s.storage ?? []).filter(Boolean).length;
       return {
@@ -532,7 +559,7 @@ export function interactWithStructure(
   state: SurvivalState;
   message: string;
   sound?: 'pickup' | 'drink' | 'craft';
-  openModal?: 'storage' | 'craft';
+  openModal?: 'storage' | 'craft' | 'forge';
 } {
   const idx = state.structures.findIndex((s) => s.id === structureId);
   if (idx === -1) return { state, message: '' };
@@ -558,8 +585,12 @@ export function interactWithStructure(
     };
   };
 
-  if (s.type === 'workbench' || s.type === 'forge') {
+  if (s.type === 'workbench') {
     return { state, message: `Opened ${STRUCTURE_CATALOG[s.type].name}`, openModal: 'craft' };
+  }
+
+  if (s.type === 'forge') {
+    return { state, message: `Opened ${STRUCTURE_CATALOG[s.type].name}`, openModal: 'forge' };
   }
 
   if (s.type === 'storage_chest') {
@@ -743,6 +774,169 @@ export function transferChestSlot(
     ...state,
     inventory: nextBag,
     structures: nextStructures,
+  };
+}
+
+export function getForgeQueue(s: PlacedStructure): ForgeQueueState {
+  return {
+    inputWood: s.forgeQueue?.inputWood ?? 0,
+    progressSec: s.forgeQueue?.progressSec ?? 0,
+    outputDriftwood: s.forgeQueue?.outputDriftwood ?? 0,
+  };
+}
+
+export function isForgeWoodItem(itemId: ItemId): itemId is 'log' | 'stick' {
+  return itemId === 'log' || itemId === 'stick';
+}
+
+export function depositWoodToForge(
+  state: SurvivalState,
+  forgeId: string,
+  itemId: 'log' | 'stick',
+  preferSlotIdx?: number
+): { state: SurvivalState; ok: boolean; message: string } {
+  const sIdx = state.structures.findIndex((s) => s.id === forgeId && s.type === 'forge');
+  if (sIdx === -1) return { state, ok: false, message: 'Forge not found.' };
+
+  const forge = state.structures[sIdx];
+  const fq = getForgeQueue(forge);
+  const feedAmount = itemId === 'log' ? 2 : 1;
+
+  if (fq.inputWood >= FORGE_TUNING.MAX_QUEUE_WOOD) {
+    return {
+      state,
+      ok: false,
+      message: `Forge input is full (${FORGE_TUNING.MAX_QUEUE_WOOD}/${FORGE_TUNING.MAX_QUEUE_WOOD} wood queued).`,
+    };
+  }
+  if (fq.inputWood + feedAmount > FORGE_TUNING.MAX_QUEUE_WOOD) {
+    return {
+      state,
+      ok: false,
+      message: `Forge queue nearly full (${fq.inputWood}/${FORGE_TUNING.MAX_QUEUE_WOOD}) — insert a Fallen Branch (+1) or let one finish.`,
+    };
+  }
+
+  let nextInv: (InventorySlot | null)[] | null = null;
+  if (preferSlotIdx !== undefined) {
+    const picked = state.inventory[preferSlotIdx];
+    if (picked && picked.itemId === itemId && picked.count > 0) {
+      nextInv = state.inventory.map((s) => (s ? { ...s } : null));
+      const slot = nextInv[preferSlotIdx]!;
+      slot.count -= 1;
+      if (slot.count <= 0) {
+        nextInv[preferSlotIdx] = null;
+      }
+    }
+  }
+  if (!nextInv) {
+    const rem = removeItem(state.inventory, itemId, 1);
+    if (!rem.success) {
+      return { state, ok: false, message: `You have no ${ITEM_DEFS[itemId].name} to burn.` };
+    }
+    nextInv = rem.inventory;
+  }
+
+  const nextStructures = state.structures.slice();
+  nextStructures[sIdx] = {
+    ...forge,
+    forgeQueue: {
+      inputWood: fq.inputWood + feedAmount,
+      progressSec: fq.progressSec,
+      outputDriftwood: fq.outputDriftwood,
+    },
+  };
+
+  return {
+    state: {
+      ...state,
+      inventory: nextInv,
+      structures: nextStructures,
+    },
+    ok: true,
+    message: `Loaded ${ITEM_DEFS[itemId].name} (+${feedAmount} wood kiln charge).`,
+  };
+}
+
+export function tickForgeJobs(
+  structures: PlacedStructure[],
+  deltaRealSec: number
+): PlacedStructure[] {
+  if (deltaRealSec <= 0 || structures.length === 0) return structures;
+  let changed = false;
+
+  const updated = structures.map((s) => {
+    if (s.type !== 'forge') return s;
+    const fq = getForgeQueue(s);
+    if (fq.inputWood <= 0) return s;
+
+    let inputWood = fq.inputWood;
+    let progressSec = fq.progressSec + deltaRealSec;
+    let outputDriftwood = fq.outputDriftwood;
+
+    while (inputWood > 0 && progressSec >= FORGE_TUNING.WOOD_TO_DRIFTWOOD_SEC) {
+      progressSec -= FORGE_TUNING.WOOD_TO_DRIFTWOOD_SEC;
+      inputWood -= 1;
+      outputDriftwood += 1;
+    }
+    if (inputWood === 0) {
+      progressSec = 0;
+    }
+
+    changed = true;
+    return {
+      ...s,
+      forgeQueue: {
+        inputWood,
+        progressSec,
+        outputDriftwood,
+      },
+    };
+  });
+
+  return changed ? updated : structures;
+}
+
+export function collectForgeDriftwood(
+  state: SurvivalState,
+  forgeId: string
+): { state: SurvivalState; collected: number; message: string } {
+  const sIdx = state.structures.findIndex((s) => s.id === forgeId && s.type === 'forge');
+  if (sIdx === -1) return { state, collected: 0, message: 'Forge not found.' };
+
+  const forge = state.structures[sIdx];
+  const fq = getForgeQueue(forge);
+  if (fq.outputDriftwood <= 0) {
+    return { state, collected: 0, message: 'No finished Driftwood to collect yet.' };
+  }
+
+  const addedRes = addItem(state.inventory, 'driftwood', fq.outputDriftwood);
+  if (addedRes.added <= 0) {
+    return { state, collected: 0, message: 'Backpack is full — free a slot to collect Driftwood.' };
+  }
+
+  const nextStructures = state.structures.slice();
+  nextStructures[sIdx] = {
+    ...forge,
+    forgeQueue: {
+      inputWood: fq.inputWood,
+      progressSec: fq.progressSec,
+      outputDriftwood: fq.outputDriftwood - addedRes.added,
+    },
+  };
+
+  return {
+    state: {
+      ...state,
+      inventory: addedRes.inventory,
+      structures: nextStructures,
+      stats: {
+        ...state.stats,
+        itemsGathered: state.stats.itemsGathered + addedRes.added,
+      },
+    },
+    collected: addedRes.added,
+    message: `Collected +${addedRes.added} Driftwood into your backpack!`,
   };
 }
 

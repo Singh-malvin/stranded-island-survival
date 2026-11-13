@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { BASE_BUILDING, BOAT, NEEDS, NODE_RESPAWN_HOURS, TIME, VOYAGE, WORLD } from './config.ts';
+import { BASE_BUILDING, BOAT, FORGE_TUNING, NEEDS, NODE_RESPAWN_HOURS, TIME, VOYAGE, WORLD } from './config.ts';
 import {
   addItem,
   countItem,
@@ -9,7 +9,7 @@ import {
   removeItem,
   swapSlots,
 } from './items.ts';
-import { checkRecipeAvailability, craftRecipeById, RECIPES } from './recipes.ts';
+import { checkRecipeAvailability, craftRecipeById, getRecipesUsingItem, RECIPES } from './recipes.ts';
 import {
   advanceClock,
   applyFallDamage,
@@ -29,9 +29,11 @@ import {
   tickNodeRespawns,
 } from './gathering.ts';
 import {
+  clampCameraClearance,
   classifyStepSurface,
   getZoneAt,
   ISLAND_GATES,
+  resolveCollidersPushout,
   resolveWorldMovement,
   revealMapAround,
   sampleIslandHeight,
@@ -71,10 +73,14 @@ import {
   tickVoyage,
 } from './voyage.ts';
 import {
+  collectForgeDriftwood,
+  depositWoodToForge,
+  getForgeQueue,
   getNearbyStations,
   interactWithStructure,
   performSpearfishing,
   placeStructure,
+  tickForgeJobs,
   tickStructuresProduction,
   transferChestSlot,
 } from './structures.ts';
@@ -859,25 +865,39 @@ describe('Stage 6 — Escape Boat Building, Sea Voyage & Port Solis Arrival', ()
 });
 
 describe('Stage 7 — Graphics Quality Presets & Atmospheric Settings', () => {
-  it('defines progressive Low / Medium / High presets with safe software-GL defaults', () => {
+  it('defines progressive Low / Medium / High / Ultra presets with safe software-GL defaults', () => {
     assert.equal(isValidGraphicsQuality('low'), true);
     assert.equal(isValidGraphicsQuality('medium'), true);
     assert.equal(isValidGraphicsQuality('high'), true);
-    assert.equal(isValidGraphicsQuality('ultra'), false);
+    assert.equal(isValidGraphicsQuality('ultra'), true);
+    assert.equal(isValidGraphicsQuality('potato'), false);
 
     assert.equal(GRAPHICS_PRESETS.low.shadows, false);
     assert.equal(GRAPHICS_PRESETS.low.bloom, false);
     assert.equal(GRAPHICS_PRESETS.low.waterShader, false);
+    assert.equal(GRAPHICS_PRESETS.low.pbrMaps, false);
+    assert.equal(GRAPHICS_PRESETS.low.grassDensity, 0);
 
     assert.equal(GRAPHICS_PRESETS.medium.shadows, true);
     assert.equal(GRAPHICS_PRESETS.medium.shadowMapSize, 1024);
     assert.equal(GRAPHICS_PRESETS.medium.fireShadow, false);
     assert.equal(GRAPHICS_PRESETS.medium.waterShader, true);
+    assert.equal(GRAPHICS_PRESETS.medium.pbrMaps, true);
+    assert.equal(GRAPHICS_PRESETS.medium.smaa, true);
 
     assert.equal(GRAPHICS_PRESETS.high.shadows, true);
     assert.equal(GRAPHICS_PRESETS.high.shadowMapSize, 2048);
+    assert.equal(GRAPHICS_PRESETS.high.csm, true);
+    assert.equal(GRAPHICS_PRESETS.high.ssao, true);
+    assert.equal(GRAPHICS_PRESETS.high.planarReflection, true);
     assert.equal(GRAPHICS_PRESETS.high.fireShadow, true);
     assert.equal(GRAPHICS_PRESETS.high.bloom, true);
+
+    assert.equal(GRAPHICS_PRESETS.ultra.shadows, true);
+    assert.equal(GRAPHICS_PRESETS.ultra.csm, true);
+    assert.equal(GRAPHICS_PRESETS.ultra.ssao, true);
+    assert.equal(GRAPHICS_PRESETS.ultra.dof, true);
+    assert.equal(GRAPHICS_PRESETS.ultra.grassDensity, 1.0);
 
     assert.equal(loadGraphicsQuality(true), 'low');
     assert.equal(loadGraphicsQuality(false), 'high');
@@ -967,5 +987,132 @@ describe('Stage 9 — Final Playtest & Debug Weather Override Controls', () => {
 
     const auto = stepWeather({ ...rain, override: undefined }, 10);
     assert.equal(auto.override, undefined);
+  });
+});
+
+describe('Fix 3 — Mountain Cliff, Plane Wreckage & Camera Solid Collision', () => {
+  it('blocks climbing steep mountains from multiple sides while allowing smooth contour sliding', () => {
+    const allGates = ISLAND_GATES.map((g) => g.id);
+
+    // Even with all gates unlocked, central basalt mountain ridges at x=28 and x=-38 block straight ascent
+    let px = 28;
+    let pz = 54;
+    for (let step = 0; step < 30; step++) {
+      const res = resolveWorldMovement(px, pz, px, pz - 0.5, allGates);
+      px = res.x;
+      pz = res.z;
+    }
+    assert.ok(pz > 43, `Player walked over south basalt mountain ridge to z=${pz.toFixed(2)}`);
+
+    // Approaching steep north side of same mountain ridge (moving +Z)
+    let nx = -36;
+    let nz = 30;
+    for (let step = 0; step < 30; step++) {
+      const res = resolveWorldMovement(nx, nz, nx, nz + 0.5, allGates);
+      nx = res.x;
+      nz = res.z;
+    }
+    assert.ok(nz < 41, `Player walked over north face of mountain ridge to z=${nz.toFixed(2)}`);
+
+    // Diagonal movement into mountain slope slides laterally without freezing
+    const diagStartX = 28;
+    const diagStartZ = 48.5;
+    let sx = diagStartX;
+    let sz = diagStartZ;
+    for (let step = 0; step < 12; step++) {
+      const res = resolveWorldMovement(sx, sz, sx + 0.35, sz - 0.35, allGates);
+      sx = res.x;
+      sz = res.z;
+    }
+    assert.ok(sx > diagStartX + 1.0, `Expected smooth diagonal slide along mountain, sx=${sx.toFixed(2)}`);
+  });
+
+  it('prevents walking inside Flight 404 fuselage, wing, engine nacelle, and keeps camera clear', () => {
+    const wx = WORLD.WRECK_POS.x;
+    const wz = WORLD.WRECK_POS.z;
+
+    // Approach fuselage center from ALL 4 cardinal directions
+    const approaches = [
+      { name: '-X west', fx: wx - 7, fz: wz, tx: wx, tz: wz },
+      { name: '+X east', fx: wx + 7, fz: wz, tx: wx, tz: wz },
+      { name: '-Z north', fx: wx, fz: wz - 6, tx: wx, tz: wz },
+      { name: '+Z south', fx: wx, fz: wz + 8, tx: wx, tz: wz + 2.6 },
+    ];
+    for (const a of approaches) {
+      const res = resolveWorldMovement(a.fx, a.fz, a.tx, a.tz, []);
+      assert.equal(res.blockedByObstacle, true, `Expected wreckage block from ${a.name}`);
+      const stillInside = resolveCollidersPushout(res.x, res.z, 0.42).hit;
+      assert.equal(stillInside, false, `Player remained inside wreckage collider from ${a.name}`);
+    }
+
+    // Dynamic obstacle collider (tree / placed forge) & camera clearance pushout
+    const dynamicForge = [{ kind: 'circle' as const, id: 'test_forge', x: 5, z: 140, radius: 0.92 }];
+    const hitForge = resolveWorldMovement(2, 140, 5, 140, [], WORLD.WATER_LEVEL, dynamicForge);
+    assert.ok(Math.hypot(hitForge.x - 5, hitForge.z - 140) >= 1.3, 'Clipped into dynamic forge');
+
+    const camSafe = clampCameraClearance(wx, 1.8, wz, dynamicForge);
+    assert.ok(Math.hypot(camSafe.x - wx, camSafe.z - wz) >= 1.4, 'Camera clipped inside wreckage');
+  });
+});
+
+describe('Fix 5 & Fix 6 — Recipe Usage Lookup & Wood -> Forge -> Driftwood Kiln', () => {
+  it('returns crafting recipes using each item and processes Wood into Driftwood via Forge', () => {
+    let state = createInitialSurvivalState();
+    state.inventory = addItem(state.inventory, 'stone', 12).inventory;
+    state.inventory = addItem(state.inventory, 'log', 8).inventory;
+    state.inventory = addItem(state.inventory, 'flint', 6).inventory;
+    state.inventory = addItem(state.inventory, 'stick', 2).inventory;
+
+    const forgePlace = placeStructure(state, 'forge', 6, 0.8, 138, 0);
+    assert.equal(forgePlace.ok, true);
+    state = forgePlace.state;
+    const forgeId = forgePlace.structureId!;
+
+    // Interacting with placed Forge opens Forge modal
+    const inter = interactWithStructure(state, forgeId, state.weather);
+    assert.equal(inter.openModal, 'forge');
+
+    // Deposit 1 Timber Log (+2 kiln wood) and 1 Fallen Branch (+1 kiln wood)
+    const depLog = depositWoodToForge(state, forgeId, 'log');
+    assert.equal(depLog.ok, true);
+    state = depLog.state;
+    const depStick = depositWoodToForge(state, forgeId, 'stick');
+    assert.equal(depStick.ok, true);
+    state = depStick.state;
+
+    const fqBefore = getForgeQueue(state.structures.find((s) => s.id === forgeId)!);
+    assert.equal(fqBefore.inputWood, 3);
+    assert.equal(fqBefore.outputDriftwood, 0);
+
+    // Advance half a batch -> still burning, progress > 0, no output yet
+    state = {
+      ...state,
+      structures: tickForgeJobs(state.structures, FORGE_TUNING.WOOD_TO_DRIFTWOOD_SEC * 0.5),
+    };
+    const fqMid = getForgeQueue(state.structures.find((s) => s.id === forgeId)!);
+    assert.ok(fqMid.progressSec > 0 && fqMid.outputDriftwood === 0);
+
+    // Finish all 3 wood items -> yields 3 Driftwood
+    state = {
+      ...state,
+      structures: tickForgeJobs(state.structures, FORGE_TUNING.WOOD_TO_DRIFTWOOD_SEC * 3),
+    };
+    const fqDone = getForgeQueue(state.structures.find((s) => s.id === forgeId)!);
+    assert.equal(fqDone.inputWood, 0);
+    assert.equal(fqDone.outputDriftwood, 3);
+
+    // Collect Driftwood into backpack & craft with it
+    const collected = collectForgeDriftwood(state, forgeId);
+    assert.equal(collected.collected, 3);
+    state = collected.state;
+    assert.equal(countItem(state.inventory, 'driftwood'), 3);
+
+    const driftwoodRecipes = getRecipesUsingItem('driftwood');
+    assert.ok(driftwoodRecipes.some((r) => r.recipeId === 'driftwood_planks'));
+    assert.ok(driftwoodRecipes.some((r) => r.recipeId === 'driftwood_charcoal'));
+
+    const crafted = craftRecipeById('driftwood_charcoal', state.inventory, new Set(['forge']), state.flags);
+    assert.equal(crafted.ok, true);
+    assert.equal(countItem(crafted.inventory, 'coal'), 2);
   });
 });

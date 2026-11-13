@@ -351,6 +351,15 @@ export const JournalMapModal: React.FC<JournalMapModalProps> = ({
                 </div>
               ))}
 
+              {/* Wood -> Forge -> Driftwood Field Craft Tip */}
+              <div className="rounded-lg border border-orange-900/50 bg-orange-950/20 px-4 py-3 text-xs text-orange-100/90">
+                <strong className="text-orange-300">Kiln Craft Guide (Wood → Forge → Driftwood):</strong>{' '}
+                Chop Palm or Pine trees with an Axe or collect Fallen Branches off the ground for Wood. Build a{' '}
+                <strong className="text-stone-100">Stone Charcoal Forge [B]</strong>, press{' '}
+                <strong className="text-stone-100">[E]</strong> to insert Wood into the kiln slot, let it burn for{' '}
+                a few seconds, and collect <strong className="text-amber-300">Driftwood</strong> for torches, planks, spears &amp; coal.
+              </div>
+
               {/* Island Gates Overview */}
               <div className="mt-2 rounded-lg border border-stone-800 bg-stone-900/40 p-3.5">
                 <div className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-stone-400">

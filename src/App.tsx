@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { audio } from './audio/audio.ts';
 import { GraphicsQuality, loadGraphicsQuality } from './scene/GraphicsConfig.ts';
 import { HoveredTargetInfo, SurvivalScene3D } from './scene/SurvivalScene3D.ts';
-import { INVENTORY, NEEDS, SAVE, TIME, WILDLIFE, WORLD } from './survival/config.ts';
+import { HUD_TUNING, INVENTORY, NEEDS, SAVE, TIME, WILDLIFE, WORLD } from './survival/config.ts';
 import {
   createInitialSurvivalState,
   hitGatherNode,
@@ -39,11 +39,14 @@ import {
   writeSurvivalSave,
 } from './survival/save.ts';
 import {
+  collectForgeDriftwood,
+  depositWoodToForge,
   getNearbyStations,
   interactWithStructure,
   performSpearfishing,
   placeStructure,
   STRUCTURE_CATALOG,
+  tickForgeJobs,
   tickStructuresProduction,
   transferChestSlot,
 } from './survival/structures.ts';
@@ -79,6 +82,7 @@ import {
 import { BoatVoyageModal } from './ui/BoatVoyageModal.tsx';
 import { BuildModal } from './ui/BuildModal.tsx';
 import { CityEndingModal } from './ui/CityEndingModal.tsx';
+import { ForgeModal } from './ui/ForgeModal.tsx';
 import { InventoryCraftModal } from './ui/InventoryCraftModal.tsx';
 import { JournalMapModal, JournalTab } from './ui/JournalMapModal.tsx';
 import { StorageModal } from './ui/StorageModal.tsx';
@@ -114,6 +118,7 @@ export default function App() {
   const [isBuildMenuOpen, setIsBuildMenuOpen] = useState(false);
   const [activeBuildType, setActiveBuildType] = useState<StructureType | null>(null);
   const [openChestId, setOpenChestId] = useState<string | null>(null);
+  const [openForgeId, setOpenForgeId] = useState<string | null>(null);
   const [isBoatDockOpen, setIsBoatDockOpen] = useState(false);
   const [journalTab, setJournalTab] = useState<JournalTab | null>(null);
   const [isPaused, setIsPaused] = useState(false);
@@ -121,6 +126,7 @@ export default function App() {
     loadGraphicsQuality(false)
   );
   const [isMuted, setIsMuted] = useState(false);
+  const [showControlsHint, setShowControlsHint] = useState(true);
 
   const [hoveredTarget, setHoveredTarget] = useState<HoveredTargetInfo | null>(null);
   const [playerContext, setPlayerContext] = useState<PlayerContext>({
@@ -182,6 +188,58 @@ export default function App() {
     sceneRef.current?.setBuildPreviewType(null);
   };
 
+  type ActivePanel = 'inventory' | 'build' | 'journal' | 'map' | 'chest' | 'forge' | 'boatDock';
+
+  const closeAllMenusAndLock = (options?: { relockPointer?: boolean }) => {
+    setIsInventoryOpen(false);
+    setIsBuildMenuOpen(false);
+    setIsBoatDockOpen(false);
+    setOpenChestId(null);
+    setOpenForgeId(null);
+    setJournalTab(null);
+    setIsPaused(false);
+    sceneRef.current?.setUiBlocked(false);
+    if (options?.relockPointer !== false) {
+      sceneRef.current?.lockPointer();
+    }
+  };
+
+  const openPanel = (panel: 'inventory' | 'build' | 'journal' | 'map') => {
+    cancelBuildMode();
+    setIsInventoryOpen(panel === 'inventory');
+    setIsBuildMenuOpen(panel === 'build');
+    setIsBoatDockOpen(false);
+    setOpenChestId(null);
+    setOpenForgeId(null);
+    setJournalTab(panel === 'journal' ? 'objectives' : panel === 'map' ? 'map' : null);
+    sceneRef.current?.setUiBlocked(true);
+    sceneRef.current?.unlockPointer();
+  };
+
+  const currentPanel: ActivePanel | null = isBoatDockOpen
+    ? 'boatDock'
+    : openChestId !== null
+      ? 'chest'
+      : openForgeId !== null
+        ? 'forge'
+        : isBuildMenuOpen
+          ? 'build'
+          : isInventoryOpen
+            ? 'inventory'
+            : journalTab === 'map'
+              ? 'map'
+              : journalTab !== null
+                ? 'journal'
+                : null;
+
+  const togglePanel = (panel: 'inventory' | 'build' | 'journal' | 'map') => {
+    if (currentPanel === panel) {
+      closeAllMenusAndLock({ relockPointer: true });
+    } else {
+      openPanel(panel);
+    }
+  };
+
   const isUiModalOpen =
     screen !== 'playing' ||
     isInventoryOpen ||
@@ -190,6 +248,7 @@ export default function App() {
     gameState.voyage.phase === 'stopover' ||
     gameState.voyage.phase === 'arrived' ||
     openChestId !== null ||
+    openForgeId !== null ||
     journalTab !== null ||
     isPaused ||
     !gameState.alive;
@@ -434,11 +493,23 @@ export default function App() {
       else if (res.sound === 'craft') audio.playCraft();
 
       if (res.openModal === 'craft') {
-        setIsInventoryOpen(true);
+        openPanel('inventory');
         return;
       }
       if (res.openModal === 'storage') {
+        cancelBuildMode();
+        setOpenForgeId(null);
         setOpenChestId(target.structureDef.id);
+        sceneRef.current?.setUiBlocked(true);
+        sceneRef.current?.unlockPointer();
+        return;
+      }
+      if (res.openModal === 'forge') {
+        cancelBuildMode();
+        setOpenChestId(null);
+        setOpenForgeId(target.structureDef.id);
+        sceneRef.current?.setUiBlocked(true);
+        sceneRef.current?.unlockPointer();
         return;
       }
       if (res.state !== current) {
@@ -516,7 +587,11 @@ export default function App() {
 
     scene.setCallbacks({
       onPrimaryAction: (t) => handlePrimaryActionRef.current(t),
-      onOpenCampfireCraft: () => setIsInventoryOpen(true),
+      onOpenCampfireCraft: () => openPanel('inventory'),
+      onCancelBuild: () => {
+        cancelBuildMode();
+        showStatus('Build mode cancelled.');
+      },
       onStepSound: (surface) => audio.playStep(surface),
       onThunderStrike: () => audio.playThunder(),
       onJump: () => {
@@ -693,11 +768,12 @@ export default function App() {
         // 4. Respawn renewable nodes whose timer elapsed, advance structures & expand Fog-of-War
         const deltaGameHours = Math.max(0, nextClock.totalHours - prev.clock.totalHours);
         const nextNodes = tickNodeRespawns(prev.nodes, nextClock.totalHours);
-        const nextStructures = tickStructuresProduction(
+        const producedStructures = tickStructuresProduction(
           prev.structures ?? [],
           deltaGameHours,
           nextWeather
         );
+        const nextStructures = tickForgeJobs(producedStructures, dtSec);
         const nextCells = revealMapAround(prev.discoveredCells, runtime.x, runtime.z);
 
         // Update procedural ambient & adaptive soundscape
@@ -771,29 +847,38 @@ export default function App() {
     return () => window.clearInterval(interval);
   }, [screen, isPaused, showDebug]);
 
-  // Global keyboard shortcuts (Hotbar 1–6, [Tab]/[I]/[C] Craft, [J] Journal, [M] Map, [F] Consume, [Esc])
+  // Auto-hide controls hint ribbon after the first few minutes of active play (toggle anytime with H)
+  useEffect(() => {
+    if (screen !== 'playing') return;
+    const tid = window.setTimeout(() => {
+      setShowControlsHint(false);
+    }, HUD_TUNING.HINT_AUTO_HIDE_SEC * 1000);
+    return () => window.clearTimeout(tid);
+  }, [screen]);
+
+  // Global keyboard shortcuts (Hotbar 1–6, [B] Build, [Tab]/[I]/[C] Craft, [J] Journal, [M] Map, [H] Hints, [F] Consume, [Esc])
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (screen !== 'playing' || !stateRef.current.alive) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (isPaused) {
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          closeAllMenusAndLock({ relockPointer: true });
+        }
+        return;
+      }
 
       if (e.code === 'Tab' || e.code === 'KeyI' || e.code === 'KeyC') {
         e.preventDefault();
-        setJournalTab(null);
-        setIsBuildMenuOpen(false);
-        setIsBoatDockOpen(false);
-        setOpenChestId(null);
-        setIsInventoryOpen((open) => !open);
+        togglePanel('inventory');
         return;
       }
 
       if (e.code === 'KeyB') {
         e.preventDefault();
-        setJournalTab(null);
-        setIsInventoryOpen(false);
-        setIsBoatDockOpen(false);
-        setOpenChestId(null);
-        cancelBuildMode();
-        setIsBuildMenuOpen((open) => !open);
+        togglePanel('build');
         return;
       }
 
@@ -805,39 +890,26 @@ export default function App() {
 
       if (e.code === 'KeyJ') {
         e.preventDefault();
-        setIsInventoryOpen(false);
-        setIsBuildMenuOpen(false);
-        setIsBoatDockOpen(false);
-        setOpenChestId(null);
-        setJournalTab((tab) => (tab === 'objectives' || tab === 'clues' ? null : 'objectives'));
+        togglePanel('journal');
         return;
       }
 
       if (e.code === 'KeyM') {
         e.preventDefault();
-        setIsInventoryOpen(false);
-        setIsBuildMenuOpen(false);
-        setIsBoatDockOpen(false);
-        setOpenChestId(null);
-        setJournalTab((tab) => (tab === 'map' ? null : 'map'));
+        togglePanel('map');
         return;
       }
 
       if (e.code === 'Escape') {
-        if (isBoatDockOpen) {
-          setIsBoatDockOpen(false);
-        } else if (openChestId !== null) {
-          setOpenChestId(null);
-        } else if (isBuildMenuOpen) {
-          setIsBuildMenuOpen(false);
+        e.preventDefault();
+        if (currentPanel !== null) {
+          closeAllMenusAndLock({ relockPointer: true });
         } else if (activeBuildType !== null) {
           cancelBuildMode();
-        } else if (journalTab !== null) {
-          setJournalTab(null);
-        } else if (isInventoryOpen) {
-          setIsInventoryOpen(false);
         } else {
-          setIsPaused((p) => !p);
+          sceneRef.current?.setUiBlocked(true);
+          sceneRef.current?.unlockPointer();
+          setIsPaused(true);
         }
         return;
       }
@@ -850,21 +922,24 @@ export default function App() {
         return;
       }
 
-      if (e.code === 'KeyF') {
+      if (e.code === 'KeyF' && !isUiModalOpen) {
         handleConsumeSlot(stateRef.current.selectedSlot);
+        return;
+      }
+
+      if (e.code === 'KeyH' && !isUiModalOpen) {
+        e.preventDefault();
+        setShowControlsHint((prev) => !prev);
       }
     };
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [
     screen,
-    isInventoryOpen,
-    isBuildMenuOpen,
-    isBoatDockOpen,
+    isPaused,
+    currentPanel,
     activeBuildType,
-    openChestId,
-    journalTab,
     isUiModalOpen,
   ]);
 
@@ -1085,6 +1160,10 @@ export default function App() {
 
   const handleDebugGrantSupplies = () => {
     const grants: Array<[ItemId, number]> = [
+      ['stone', 12],
+      ['log', 10],
+      ['flint', 6],
+      ['stick', 8],
       ['machete', 1],
       ['spear', 1],
       ['climbing_gear', 1],
@@ -1103,7 +1182,7 @@ export default function App() {
       inv = addItem(inv, id, count).inventory;
     }
     setGameState((prev) => ({ ...prev, inventory: inv }));
-    showStatus('Debug: Added Stage 5 expedition gear & station repair parts.');
+    showStatus('Debug: Added building supplies, wood, Stage 5 gear & repair parts.');
   };
 
   const handleDebugAdvanceTime = (hours: number = 4) => {
@@ -1165,9 +1244,11 @@ export default function App() {
     setIsBuildMenuOpen(false);
     setIsBoatDockOpen(false);
     setOpenChestId(null);
+    setOpenForgeId(null);
     cancelBuildMode();
     setJournalTab(null);
     setIsPaused(false);
+    setShowControlsHint(true);
     setScreen('playing');
     sceneRef.current?.snapPlayerToGround(fresh.player.x, fresh.player.z, fresh.player.yaw);
     showStatus('Washed ashore beside Flight 404. Inspect the wing manifest and gather materials.');
@@ -1188,6 +1269,10 @@ export default function App() {
   const activeChest = useMemo(
     () => (openChestId ? (gameState.structures ?? []).find((s) => s.id === openChestId) ?? null : null),
     [openChestId, gameState.structures]
+  );
+  const activeForge = useMemo(
+    () => (openForgeId ? (gameState.structures ?? []).find((s) => s.id === openForgeId) ?? null : null),
+    [openForgeId, gameState.structures]
   );
 
   return (
@@ -1227,35 +1312,25 @@ export default function App() {
           showDebug={showDebug}
           damageFlash={damageFlash}
           isMuted={isMuted}
+          showControlsHint={showControlsHint}
+          onToggleControlsHint={() => setShowControlsHint((prev) => !prev)}
           onSelectSlot={(idx) => setGameState((prev) => ({ ...prev, selectedSlot: idx }))}
           onUseSelected={() => handleConsumeSlot(gameState.selectedSlot)}
-          onOpenInventory={() => {
-            setJournalTab(null);
-            setIsBuildMenuOpen(false);
-            setOpenChestId(null);
-            setIsInventoryOpen(true);
-          }}
-          onOpenBuild={() => {
-            setJournalTab(null);
-            setIsInventoryOpen(false);
-            setOpenChestId(null);
-            cancelBuildMode();
-            setIsBuildMenuOpen(true);
-          }}
+          onOpenInventory={() => openPanel('inventory')}
+          onOpenBuild={() => openPanel('build')}
           onCancelBuild={cancelBuildMode}
-          onOpenJournal={() => {
-            setIsInventoryOpen(false);
-            setIsBuildMenuOpen(false);
-            setOpenChestId(null);
-            setJournalTab('objectives');
+          onOpenJournal={() => openPanel('journal')}
+          onOpenMap={() => openPanel('map')}
+          onTogglePause={() => {
+            if (isPaused) {
+              closeAllMenusAndLock({ relockPointer: true });
+            } else {
+              closeAllMenusAndLock({ relockPointer: false });
+              setIsPaused(true);
+              sceneRef.current?.setUiBlocked(true);
+              sceneRef.current?.unlockPointer();
+            }
           }}
-          onOpenMap={() => {
-            setIsInventoryOpen(false);
-            setIsBuildMenuOpen(false);
-            setOpenChestId(null);
-            setJournalTab('map');
-          }}
-          onTogglePause={() => setIsPaused((p) => !p)}
           onToggleMute={() => setIsMuted(audio.toggleMute())}
           onDebugTeleport={handleDebugTeleport}
           onDebugGrantSupplies={handleDebugGrantSupplies}
@@ -1270,7 +1345,7 @@ export default function App() {
         <BoatVoyageModal
           state={gameState}
           isDockOpen={isBoatDockOpen}
-          onCloseDock={() => setIsBoatDockOpen(false)}
+          onCloseDock={() => closeAllMenusAndLock({ relockPointer: true })}
           onBuildStage={handleBuildBoatStage}
           onLaunchVoyage={handleLaunchVoyage}
           onSetThrottle={handleSetThrottle}
@@ -1299,13 +1374,15 @@ export default function App() {
           setIsBuildMenuOpen(false);
           setActiveBuildType(type);
           sceneRef.current?.setBuildPreviewType(type);
+          sceneRef.current?.setUiBlocked(false);
+          sceneRef.current?.lockPointer();
           showStatus(
             `Aim at ${
               STRUCTURE_CATALOG[type].surface === 'shallow_water' ? 'shallow water' : 'dry ground'
             } and press [E / Click] to place ${STRUCTURE_CATALOG[type].name}.`
           );
         }}
-        onClose={() => setIsBuildMenuOpen(false)}
+        onClose={() => closeAllMenusAndLock({ relockPointer: true })}
       />
 
       <StorageModal
@@ -1315,7 +1392,30 @@ export default function App() {
           audio.playPickup();
           commitAndSave(transferChestSlot(stateRef.current, chestId, fromChest, slotIdx), 'autosave');
         }}
-        onClose={() => setOpenChestId(null)}
+        onClose={() => closeAllMenusAndLock({ relockPointer: true })}
+      />
+
+      <ForgeModal
+        forge={activeForge}
+        state={gameState}
+        onDepositWood={(forgeId, itemId, slotIdx) => {
+          const res = depositWoodToForge(stateRef.current, forgeId, itemId, slotIdx);
+          if (res.ok) {
+            audio.playCraft();
+            commitAndSave(res.state, 'autosave');
+          }
+          showStatus(res.message);
+        }}
+        onCollectDriftwood={(forgeId) => {
+          const res = collectForgeDriftwood(stateRef.current, forgeId);
+          if (res.collected > 0) {
+            audio.playPickup();
+            commitAndSave(res.state, 'autosave');
+          }
+          showStatus(res.message);
+        }}
+        onOpenAlloyRecipes={() => openPanel('inventory')}
+        onClose={() => closeAllMenusAndLock({ relockPointer: true })}
       />
 
       <JournalMapModal
@@ -1323,14 +1423,14 @@ export default function App() {
         initialTab={journalTab ?? 'objectives'}
         state={gameState}
         onChangeTab={(tab) => setJournalTab(tab)}
-        onClose={() => setJournalTab(null)}
+        onClose={() => closeAllMenusAndLock({ relockPointer: true })}
       />
 
       <InventoryCraftModal
         isOpen={isInventoryOpen}
         state={gameState}
         nearbyStations={nearbyStations}
-        onClose={() => setIsInventoryOpen(false)}
+        onClose={() => closeAllMenusAndLock({ relockPointer: true })}
         onSwapSlots={(fromIdx, toIdx) =>
           setGameState((prev) => ({
             ...prev,
@@ -1354,7 +1454,7 @@ export default function App() {
         state={gameState}
         graphicsQuality={graphicsQuality}
         onChangeGraphicsQuality={handleChangeGraphicsQuality}
-        onResume={() => setIsPaused(false)}
+        onResume={() => closeAllMenusAndLock({ relockPointer: true })}
         onRestart={() => handleStartNewGame(gameState.difficulty)}
       />
 

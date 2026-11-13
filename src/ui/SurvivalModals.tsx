@@ -12,7 +12,7 @@ interface TitleScreenProps {
   onStartNew: (difficulty: 'survivor' | 'hardcore') => void;
 }
 
-const QUALITY_ORDER: GraphicsQuality[] = ['low', 'medium', 'high'];
+const QUALITY_ORDER: GraphicsQuality[] = ['low', 'medium', 'high', 'ultra'];
 
 export const SurvivalTitleScreen: React.FC<TitleScreenProps> = ({
   hasSavedGame,

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   CloudRain,
   CloudLightning,
@@ -24,7 +24,8 @@ import {
 } from 'lucide-react';
 import { HoveredTargetInfo } from '../scene/SurvivalScene3D.ts';
 import { INVENTORY, TEMPERATURE } from '../survival/config.ts';
-import { getEquipped, ITEM_DEFS } from '../survival/items.ts';
+import { getEquipped, getInitialDurability, ITEM_DEFS } from '../survival/items.ts';
+import { FloatingItemTooltip, HoverTooltipData } from './ItemTooltip.tsx';
 import { computeAmbientTempC, formatClock } from '../survival/needs.ts';
 import {
   evaluateObjectivesForAct,
@@ -52,6 +53,8 @@ interface SurvivalHUDProps {
   showDebug?: boolean;
   damageFlash: boolean;
   isMuted: boolean;
+  showControlsHint?: boolean;
+  onToggleControlsHint?: () => void;
   onSelectSlot: (slotIndex: number) => void;
   onUseSelected: () => void;
   onOpenInventory: () => void;
@@ -81,6 +84,8 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
   showDebug,
   damageFlash,
   isMuted,
+  showControlsHint = true,
+  onToggleControlsHint,
   onSelectSlot,
   onUseSelected,
   onOpenInventory,
@@ -97,6 +102,7 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
   onDebugCycleWeather,
   onDebugFastSail,
 }) => {
+  const [hotbarHover, setHotbarHover] = useState<HoverTooltipData | null>(null);
   const { needs, clock, weather, inventory, selectedSlot } = state;
   const clockInfo = formatClock(clock);
   const ambientC = computeAmbientTempC(clock, weather);
@@ -159,53 +165,53 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
       )}
 
       {/* Top Bar: Environment & Clock (Left) + Current Objective & Utility Buttons (Right) */}
-      <div className="flex items-start justify-between gap-3 p-4">
+      <div className="flex items-start justify-between gap-2.5 p-2.5 sm:p-3">
         {/* Top-Left Wilderness Watch & Thermometer */}
-        <div className="pointer-events-auto flex flex-col gap-2 rounded-lg border border-stone-700/80 bg-stone-950/80 px-3.5 py-2.5 shadow-lg">
-          <div className="flex items-center gap-3 text-sm font-semibold tracking-wide text-stone-200">
-            <span className="flex items-center gap-1.5 text-amber-400">
-              {clockInfo.isNight ? <Moon className="h-4 w-4 text-sky-300" /> : <Sun className="h-4 w-4" />}
+        <div className="pointer-events-auto flex flex-col gap-1 rounded-lg border border-white/15 bg-stone-950/60 px-2.5 py-1.5 shadow-sm">
+          <div className="flex items-center gap-2 text-xs font-medium tracking-wider text-stone-100">
+            <span className="flex items-center gap-1 whitespace-nowrap text-amber-300">
+              {clockInfo.isNight ? <Moon className="h-3.5 w-3.5 text-sky-300" /> : <Sun className="h-3.5 w-3.5" />}
               DAY {clock.day}
             </span>
-            <span className="text-stone-500">•</span>
-            <span className="font-mono text-stone-100">{clockInfo.timeText}</span>
-            <span className="rounded bg-stone-800 px-2 py-0.5 text-xs text-stone-300">
+            <span className="text-stone-500">/</span>
+            <span className="font-mono text-[11px] text-stone-100">{clockInfo.timeText}</span>
+            <span className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] font-normal tracking-wide text-stone-300">
               {clockInfo.phaseLabel}
             </span>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-stone-300">
+          <div className="flex items-center gap-2 text-[11px] font-light tracking-wide text-stone-300">
             <span className="flex items-center gap-1">
               {weather.kind === 'storm' ? (
-                <CloudLightning className="h-3.5 w-3.5 text-amber-300" />
+                <CloudLightning className="h-3 w-3 text-amber-300" />
               ) : weather.kind === 'rain' ? (
-                <CloudRain className="h-3.5 w-3.5 text-sky-300" />
+                <CloudRain className="h-3 w-3 text-sky-300" />
               ) : (
-                <Compass className="h-3.5 w-3.5 text-emerald-400" />
+                <Compass className="h-3 w-3 text-emerald-400" />
               )}
               <span className="capitalize">{weather.kind}</span>
             </span>
             <span className="text-stone-600">|</span>
-            <span>Air {ambientC.toFixed(1)}°C</span>
+            <span>{ambientC.toFixed(0)}°C</span>
             <span className="text-stone-600">|</span>
             <span
               className={
                 isHypothermic
-                  ? 'font-semibold text-sky-300'
+                  ? 'font-medium text-sky-300'
                   : isCold
                     ? 'text-sky-200'
                     : 'text-stone-300'
               }
             >
-              Body {needs.temperature.toFixed(1)}°C
+              Core {needs.temperature.toFixed(1)}°C
             </span>
           </div>
 
           {/* Active location & status pills */}
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-stone-400">
+          <div className="flex flex-wrap items-center gap-1.5 text-[10px] tracking-wide text-stone-400">
             <span className="font-medium text-emerald-300/90">{currentZone.name}</span>
             {showDebug && typeof fps === 'number' && (
-              <span className="rounded bg-stone-900 px-1.5 py-0.5 font-mono text-[10px] text-amber-300 border border-stone-700">
+              <span className="rounded border border-white/10 bg-stone-900/70 px-1.5 py-0.5 font-mono text-[10px] text-amber-300">
                 {fps} FPS
               </span>
             )}
@@ -217,35 +223,35 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
             nearbyStations?.has('forge') ||
             needs.wetness > 15 ||
             needs.sickness > 0) && (
-            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+            <div className="flex flex-wrap items-center gap-1 pt-0.5">
               {playerContext.sheltered && (
-                <span className="inline-flex items-center gap-1 rounded bg-emerald-950/90 px-2 py-0.5 text-[11px] font-medium text-emerald-300 border border-emerald-700/60">
-                  <Home className="h-3 w-3 text-emerald-400" /> Sheltered
+                <span className="inline-flex items-center gap-1 rounded border border-emerald-500/35 bg-emerald-950/60 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                  <Home className="h-2.5 w-2.5 text-emerald-400" /> Sheltered
                 </span>
               )}
               {nearbyStations?.has('workbench') && (
-                <span className="inline-flex items-center gap-1 rounded bg-stone-900/95 px-2 py-0.5 text-[11px] font-medium text-emerald-300 border border-emerald-700/50">
-                  <Hammer className="h-3 w-3 text-emerald-400" /> Workbench
+                <span className="inline-flex items-center gap-1 rounded border border-emerald-500/30 bg-stone-950/70 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
+                  <Hammer className="h-2.5 w-2.5 text-emerald-400" /> Bench
                 </span>
               )}
               {nearbyStations?.has('forge') && (
-                <span className="inline-flex items-center gap-1 rounded bg-orange-950/90 px-2 py-0.5 text-[11px] font-medium text-orange-300 border border-orange-700/60">
+                <span className="inline-flex items-center gap-1 rounded border border-orange-500/35 bg-orange-950/60 px-1.5 py-0.5 text-[10px] font-medium text-orange-300">
                   ⚒️ Forge
                 </span>
               )}
               {playerContext.nearFire && (
-                <span className="inline-flex items-center gap-1 rounded bg-amber-950/90 px-2 py-0.5 text-[11px] font-medium text-amber-300 border border-amber-700/60">
-                  <Flame className="h-3 w-3 text-amber-400" /> Warm by Fire
+                <span className="inline-flex items-center gap-1 rounded border border-amber-500/35 bg-amber-950/60 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                  <Flame className="h-2.5 w-2.5 text-amber-400" /> Warm
                 </span>
               )}
               {needs.wetness > 15 && (
-                <span className="inline-flex items-center gap-1 rounded bg-sky-950/90 px-2 py-0.5 text-[11px] font-medium text-sky-300 border border-sky-700/60">
-                  <Droplets className="h-3 w-3" /> Wet ({Math.round(needs.wetness)}%)
+                <span className="inline-flex items-center gap-1 rounded border border-sky-500/35 bg-sky-950/60 px-1.5 py-0.5 text-[10px] font-medium text-sky-300">
+                  <Droplets className="h-2.5 w-2.5" /> {Math.round(needs.wetness)}%
                 </span>
               )}
               {needs.sickness > 0 && (
-                <span className="inline-flex items-center gap-1 rounded bg-lime-950/90 px-2 py-0.5 text-[11px] font-medium text-lime-300 border border-lime-700/60">
-                  <AlertTriangle className="h-3 w-3" /> Food Poisoning ({Math.ceil(needs.sickness)}s)
+                <span className="inline-flex items-center gap-1 rounded border border-lime-500/35 bg-lime-950/60 px-1.5 py-0.5 text-[10px] font-medium text-lime-300">
+                  <AlertTriangle className="h-2.5 w-2.5" /> Sick ({Math.ceil(needs.sickness)}s)
                 </span>
               )}
             </div>
@@ -253,77 +259,77 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
         </div>
 
         {/* Top-Right Objective Tracker & Quick Buttons */}
-        <div className="flex flex-col items-end gap-2">
-          <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1.5">
+        <div className="flex flex-col items-end gap-1.5">
+          <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1">
             <button
               type="button"
               onClick={onOpenJournal}
               aria-label="Open Journal and Objectives"
-              className="flex items-center gap-1.5 rounded-lg border border-stone-700/80 bg-stone-950/85 px-2.5 py-2 text-xs font-semibold text-stone-200 hover:border-amber-500/70 hover:text-amber-300"
+              className="flex items-center gap-1 rounded-md border border-white/10 bg-stone-950/45 px-2 py-1 text-[11px] font-medium tracking-wide text-stone-200 transition hover:border-amber-400/50 hover:text-amber-200"
             >
-              <BookOpen className="h-4 w-4 text-amber-400" />
+              <BookOpen className="h-3.5 w-3.5 text-amber-400" />
               <span>Journal [J]</span>
             </button>
             <button
               type="button"
               onClick={onOpenMap}
               aria-label="Open Island Map"
-              className="flex items-center gap-1.5 rounded-lg border border-stone-700/80 bg-stone-950/85 px-2.5 py-2 text-xs font-semibold text-stone-200 hover:border-amber-500/70 hover:text-amber-300"
+              className="flex items-center gap-1 rounded-md border border-white/10 bg-stone-950/45 px-2 py-1 text-[11px] font-medium tracking-wide text-stone-200 transition hover:border-amber-400/50 hover:text-amber-200"
             >
-              <MapIcon className="h-4 w-4 text-emerald-400" />
+              <MapIcon className="h-3.5 w-3.5 text-emerald-400" />
               <span>Map [M]</span>
             </button>
             <button
               type="button"
               onClick={onOpenBuild}
               aria-label="Open Base Building Menu"
-              className="flex items-center gap-1.5 rounded-lg border border-stone-700/80 bg-stone-950/85 px-2.5 py-2 text-xs font-semibold text-stone-200 hover:border-emerald-500/70 hover:text-emerald-300"
+              className="flex items-center gap-1 rounded-md border border-white/10 bg-stone-950/45 px-2 py-1 text-[11px] font-medium tracking-wide text-stone-200 transition hover:border-emerald-400/50 hover:text-emerald-200"
             >
-              <Hammer className="h-4 w-4 text-emerald-400" />
+              <Hammer className="h-3.5 w-3.5 text-emerald-400" />
               <span>Build [B]</span>
             </button>
             <button
               type="button"
               onClick={onOpenInventory}
               aria-label="Open Inventory and Crafting"
-              className="flex items-center gap-1.5 rounded-lg border border-stone-700/80 bg-stone-950/85 px-3 py-2 text-xs font-semibold text-stone-200 hover:border-amber-500/70 hover:text-amber-300"
+              className="flex items-center gap-1 rounded-md border border-white/10 bg-stone-950/45 px-2 py-1 text-[11px] font-medium tracking-wide text-stone-200 transition hover:border-amber-400/50 hover:text-amber-200"
             >
-              <Backpack className="h-4 w-4 text-amber-400" />
+              <Backpack className="h-3.5 w-3.5 text-amber-400" />
               <span>Craft [Tab]</span>
             </button>
             <button
               type="button"
               onClick={onToggleMute}
               aria-label={isMuted ? 'Unmute Audio' : 'Mute Audio'}
-              className="rounded-lg border border-stone-700/80 bg-stone-950/85 p-2 text-stone-300 hover:border-stone-500"
+              className="rounded-md border border-white/10 bg-stone-950/45 p-1.5 text-stone-300 transition hover:border-white/25"
             >
-              {isMuted ? <VolumeX className="h-4 w-4 text-red-400" /> : <Volume2 className="h-4 w-4" />}
+              {isMuted ? <VolumeX className="h-3.5 w-3.5 text-red-400" /> : <Volume2 className="h-3.5 w-3.5" />}
             </button>
             <button
               type="button"
               onClick={onTogglePause}
               aria-label="Pause Game"
-              className="rounded-lg border border-stone-700/80 bg-stone-950/85 p-2 text-stone-300 hover:border-stone-500"
+              className="rounded-md border border-white/10 bg-stone-950/45 p-1.5 text-stone-300 transition hover:border-white/25"
             >
-              <Pause className="h-4 w-4" />
+              <Pause className="h-3.5 w-3.5" />
             </button>
           </div>
 
-          <div className="max-w-xs rounded-lg border border-stone-700/75 bg-stone-950/80 px-3.5 py-2.5 text-right shadow-lg">
-            <div className="flex items-center justify-end gap-2 text-[10px] font-bold uppercase tracking-widest text-amber-400/90">
+          <div className="max-w-[260px] rounded-lg border border-white/15 bg-stone-950/60 px-2.5 py-2 text-right shadow-sm">
+            <div className="flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-amber-300/95">
               <span>
                 {actLabel} ({completedSteps}/{actSteps.length})
               </span>
               {currentObjective.progress && (
-                <span className="rounded bg-stone-800 px-1.5 py-0.5 text-[10px] font-mono text-stone-300">
+                <span className="rounded border border-white/15 bg-white/10 px-1 py-0.5 font-mono text-[9.5px] text-stone-200">
                   {currentObjective.progress}
                 </span>
               )}
             </div>
-            <div className="mt-0.5 text-xs font-semibold text-stone-100">
+            <div className="mt-0.5 text-xs font-medium text-stone-100">
               {currentObjective.title}
             </div>
-            <div className="mt-1 text-[11px] leading-snug text-stone-400">
+            <div className="mt-0.5 text-[10.5px] font-normal leading-snug text-stone-200/90">
               {currentObjective.detail}
             </div>
           </div>
@@ -392,167 +398,177 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
         )}
       </div>
 
-      {/* Bottom Area: Needs Bars (Bottom-Left) + Hotbar (Bottom-Center) */}
-      <div className="fixed inset-x-0 bottom-0 flex flex-col gap-3 p-4 md:flex-row md:items-end md:justify-between">
-        {/* Bottom-Left Needs Vitals (auto-fade when healthy/full) */}
-        <div className="pointer-events-auto flex w-64 flex-col gap-1.5 rounded-lg border border-stone-800/80 bg-stone-950/75 p-3 shadow-lg">
-          {/* Health */}
-          <div className={`flex items-center gap-2 transition-opacity ${needOpacity(needs.health)}`}>
-            <Heart className="h-3.5 w-3.5 shrink-0 text-rose-400" />
-            <div className="flex-1">
-              <div className="flex justify-between text-[11px] text-stone-300">
-                <span>Health</span>
-                <span>{Math.round(needs.health)}%</span>
+      {/* Bottom Area: Vitals + Hotbar + Safely Framed Controls Hint */}
+      <div className="fixed inset-x-0 bottom-0 flex flex-col gap-1.5 px-3 pb-3">
+        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          {/* Bottom-Left Needs Vitals (compact sleek bars) */}
+          <div className="pointer-events-auto flex w-52 flex-col gap-1 rounded-lg border border-white/15 bg-stone-950/60 p-2 shadow-sm">
+            {/* Health */}
+            <div className={`flex items-center gap-1.5 transition-opacity ${needOpacity(needs.health)}`}>
+              <Heart className="h-3 w-3 shrink-0 text-rose-400" />
+              <div className="flex-1">
+                <div className="flex justify-between text-[10px] font-light tracking-wider text-stone-300">
+                  <span>HEALTH</span>
+                  <span className="font-mono">{Math.round(needs.health)}%</span>
+                </div>
+                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full bg-rose-500 transition-all duration-200"
+                    style={{ width: `${Math.max(0, Math.min(100, needs.health))}%` }}
+                  />
+                </div>
               </div>
-              <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
-                <div
-                  className="h-full bg-rose-500 transition-all duration-200"
-                  style={{ width: `${Math.max(0, Math.min(100, needs.health))}%` }}
-                />
+            </div>
+
+            {/* Hunger */}
+            <div className={`flex items-center gap-1.5 transition-opacity ${needOpacity(needs.hunger)}`}>
+              <Utensils className="h-3 w-3 shrink-0 text-amber-400" />
+              <div className="flex-1">
+                <div className="flex justify-between text-[10px] font-light tracking-wider text-stone-300">
+                  <span>FOOD</span>
+                  <span className="font-mono">{Math.round(needs.hunger)}%</span>
+                </div>
+                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full bg-amber-400 transition-all duration-200"
+                    style={{ width: `${Math.max(0, Math.min(100, needs.hunger))}%` }}
+                  />
+                </div>
               </div>
+            </div>
+
+            {/* Thirst */}
+            <div className={`flex items-center gap-1.5 transition-opacity ${needOpacity(needs.thirst)}`}>
+              <Droplets className="h-3 w-3 shrink-0 text-sky-400" />
+              <div className="flex-1">
+                <div className="flex justify-between text-[10px] font-light tracking-wider text-stone-300">
+                  <span>WATER</span>
+                  <span className="font-mono">{Math.round(needs.thirst)}%</span>
+                </div>
+                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full bg-sky-400 transition-all duration-200"
+                    style={{ width: `${Math.max(0, Math.min(100, needs.thirst))}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Stamina */}
+            <div className={`flex items-center gap-1.5 transition-opacity ${needOpacity(needs.stamina)}`}>
+              <Zap className="h-3 w-3 shrink-0 text-emerald-400" />
+              <div className="flex-1">
+                <div className="flex justify-between text-[10px] font-light tracking-wider text-stone-300">
+                  <span>STAMINA</span>
+                  <span className="font-mono">{Math.round(needs.stamina)}%</span>
+                </div>
+                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full bg-emerald-400 transition-all duration-200"
+                    style={{ width: `${Math.max(0, Math.min(100, needs.stamina))}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Temperature */}
+            <div className="flex items-center justify-between border-t border-white/10 pt-1 text-[10px] font-light tracking-wide text-stone-400">
+              <span className="flex items-center gap-1">
+                <Thermometer className="h-3 w-3 text-amber-300" /> TEMP
+              </span>
+              <span
+                className={
+                  isHypothermic
+                    ? 'font-medium text-sky-300'
+                    : isCold
+                      ? 'text-sky-200'
+                      : 'text-stone-200'
+                }
+              >
+                {needs.temperature.toFixed(1)}°C{' '}
+                {isHypothermic ? '· Freezing' : isCold ? '· Cold' : '· Stable'}
+              </span>
             </div>
           </div>
 
-          {/* Hunger */}
-          <div className={`flex items-center gap-2 transition-opacity ${needOpacity(needs.hunger)}`}>
-            <Utensils className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-            <div className="flex-1">
-              <div className="flex justify-between text-[11px] text-stone-300">
-                <span>Nourishment</span>
-                <span>{Math.round(needs.hunger)}%</span>
+          {/* Bottom-Center 6-Slot Quick Hotbar */}
+          <div className="pointer-events-auto flex flex-col items-center gap-1">
+            {equipped.def && (
+              <div className="flex items-center gap-2 rounded-md border border-white/10 bg-stone-950/50 px-2.5 py-0.5 text-[11px] font-medium tracking-wide text-stone-200">
+                <span>{equipped.def.name}</span>
+                {equipped.def.food && (
+                  <button
+                    type="button"
+                    onClick={onUseSelected}
+                    className="rounded bg-amber-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-stone-950 hover:bg-amber-400"
+                  >
+                    Consume [F]
+                  </button>
+                )}
               </div>
-              <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
-                <div
-                  className="h-full bg-amber-500 transition-all duration-200"
-                  style={{ width: `${Math.max(0, Math.min(100, needs.hunger))}%` }}
-                />
-              </div>
-            </div>
-          </div>
+            )}
 
-          {/* Thirst */}
-          <div className={`flex items-center gap-2 transition-opacity ${needOpacity(needs.thirst)}`}>
-            <Droplets className="h-3.5 w-3.5 shrink-0 text-sky-400" />
-            <div className="flex-1">
-              <div className="flex justify-between text-[11px] text-stone-300">
-                <span>Hydration</span>
-                <span>{Math.round(needs.thirst)}%</span>
-              </div>
-              <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
-                <div
-                  className="h-full bg-sky-400 transition-all duration-200"
-                  style={{ width: `${Math.max(0, Math.min(100, needs.thirst))}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Stamina */}
-          <div className={`flex items-center gap-2 transition-opacity ${needOpacity(needs.stamina)}`}>
-            <Zap className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-            <div className="flex-1">
-              <div className="flex justify-between text-[11px] text-stone-300">
-                <span>Stamina</span>
-                <span>{Math.round(needs.stamina)}%</span>
-              </div>
-              <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-stone-800">
-                <div
-                  className="h-full bg-emerald-400 transition-all duration-200"
-                  style={{ width: `${Math.max(0, Math.min(100, needs.stamina))}%` }}
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Temperature */}
-          <div className="flex items-center justify-between pt-1 text-[11px] text-stone-400 border-t border-stone-800/80">
-            <span className="flex items-center gap-1">
-              <Thermometer className="h-3.5 w-3.5 text-amber-300" /> Core Temp
-            </span>
-            <span
-              className={
-                isHypothermic
-                  ? 'font-bold text-sky-300'
-                  : isCold
-                    ? 'text-sky-200'
-                    : 'text-stone-200'
-              }
-            >
-              {needs.temperature.toFixed(1)}°C{' '}
-              {isHypothermic ? '(Freezing!)' : isCold ? '(Chilled)' : '(Stable)'}
-            </span>
-          </div>
-        </div>
-
-        {/* Bottom-Center 6-Slot Quick Hotbar */}
-        <div className="pointer-events-auto flex flex-col items-center gap-1.5">
-          {equipped.def && (
-            <div className="flex items-center gap-2 rounded border border-stone-700/80 bg-stone-950/85 px-2.5 py-1 text-xs text-stone-200">
-              <span>{equipped.def.name}</span>
-              {equipped.def.food && (
-                <button
-                  type="button"
-                  onClick={onUseSelected}
-                  className="rounded bg-amber-600/90 px-2 py-0.5 text-[11px] font-semibold text-stone-950 hover:bg-amber-500"
-                >
-                  Consume [F]
-                </button>
-              )}
-            </div>
-          )}
-
-          <div className="flex items-center gap-1.5 rounded-xl border border-stone-700/85 bg-stone-950/85 p-1.5 shadow-xl">
-            {Array.from({ length: INVENTORY.HOTBAR_SIZE }).map((_, idx) => {
-              const slot = inventory[idx];
-              const def = slot ? ITEM_DEFS[slot.itemId] : null;
-              const isSelected = selectedSlot === idx;
-              return (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => onSelectSlot(idx)}
-                  aria-label={def ? `Hotbar slot ${idx + 1}: ${def.name}` : `Hotbar slot ${idx + 1}: empty`}
-                  className={`relative flex h-13 w-13 flex-col items-center justify-center rounded-lg border transition-all ${
-                    isSelected
-                      ? 'border-amber-400 bg-stone-800/95 shadow-inner'
-                      : 'border-stone-800 bg-stone-900/80 hover:border-stone-600'
-                  }`}
-                >
-                  <span className="absolute left-1.5 top-1 text-[10px] font-mono text-stone-400">
-                    {idx + 1}
-                  </span>
-                  {def ? (
-                    <>
-                      <span className="text-xl leading-none">{def.icon}</span>
-                      {slot && slot.count > 1 && (
-                        <span className="absolute bottom-1 right-1.5 text-[11px] font-bold text-stone-200">
-                          {slot.count}
+            <div className="flex items-center gap-1 rounded-xl border border-white/15 bg-stone-950/60 p-1 shadow-sm">
+              {Array.from({ length: INVENTORY.HOTBAR_SIZE }).map((_, idx) => {
+                const slot = inventory[idx];
+                const def = slot ? ITEM_DEFS[slot.itemId] : null;
+                const isSelected = selectedSlot === idx;
+                const maxDur = slot ? getInitialDurability(slot.itemId) : undefined;
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => onSelectSlot(idx)}
+                    onMouseEnter={(e) =>
+                      slot && setHotbarHover({ slot, x: e.clientX, y: e.clientY, preferAbove: true })
+                    }
+                    onMouseMove={(e) =>
+                      slot && setHotbarHover({ slot, x: e.clientX, y: e.clientY, preferAbove: true })
+                    }
+                    onMouseLeave={() => setHotbarHover(null)}
+                    aria-label={def ? `Hotbar slot ${idx + 1}: ${def.name}` : `Hotbar slot ${idx + 1}: empty`}
+                    className={`relative flex h-[54px] w-[58px] flex-col items-center justify-between rounded-lg border px-1 py-1 transition-all ${
+                      isSelected
+                        ? 'border-amber-400/90 bg-stone-800/75 shadow-inner'
+                        : 'border-white/10 bg-stone-900/45 hover:border-white/25'
+                    }`}
+                  >
+                    <div className="flex w-full items-center justify-between px-0.5 text-[9px] leading-none">
+                      <span className="font-mono text-stone-400">{idx + 1}</span>
+                      {slot && slot.count > 1 ? (
+                        <span className="font-semibold text-stone-200">{slot.count}</span>
+                      ) : (
+                        <span />
+                      )}
+                    </div>
+                    {def ? (
+                      <>
+                        <span className="text-base leading-none">{def.icon}</span>
+                        <span className="w-full truncate text-center text-[8.5px] font-medium leading-tight text-stone-300">
+                          {def.name}
                         </span>
-                      )}
-                      {slot?.durability !== undefined && def.id !== 'torch' && def.id !== 'lantern' && (
-                        <div className="absolute bottom-1 left-1.5 right-1.5 h-1 overflow-hidden rounded-full bg-stone-700">
-                          <div
-                            className="h-full bg-amber-400"
-                            style={{
-                              width: `${Math.min(100, Math.round((slot.durability / 60) * 100))}%`,
-                            }}
-                          />
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <span className="text-[10px] text-stone-600">Empty</span>
-                  )}
-                </button>
-              );
-            })}
+                        {slot?.durability !== undefined && maxDur && def.id !== 'torch' && def.id !== 'lantern' && (
+                          <div className="absolute bottom-0.5 left-1.5 right-1.5 h-0.5 overflow-hidden rounded-full bg-white/15">
+                            <div
+                              className="h-full bg-amber-400"
+                              style={{
+                                width: `${Math.min(100, Math.round((slot.durability / maxDur) * 100))}%`,
+                              }}
+                            />
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <span className="my-auto text-[9px] text-stone-600">—</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <FloatingItemTooltip hover={hotbarHover} />
           </div>
-          <div className="rounded-md border border-stone-800/75 bg-stone-950/75 px-3 py-1 text-[11px] text-stone-300 shadow">
-            [WASD] Move • [Space] Jump • [Shift] Sprint • [E/Click] Interact • [B] Build • [Tab] Craft • [J] Journal • [M] Map
-          </div>
-        </div>
 
-        <div className="hidden w-64 md:flex md:flex-col md:items-end md:justify-end gap-1.5">
+          <div className="flex w-52 flex-col items-end justify-end gap-1.5">
           {showDebug && onDebugTeleport && (
             <div className="pointer-events-auto flex flex-wrap justify-end gap-1 rounded-lg border border-amber-800/70 bg-stone-950/90 p-1.5 text-[10px]">
               <span className="w-full text-right font-bold uppercase tracking-wider text-amber-400">
@@ -614,6 +630,30 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
                 </button>
               )}
             </div>
+          )}
+        </div>
+        </div>
+
+        {/* Controls Hint Bar (always fits completely on screen, toggles with [H], auto-hides cleanly) */}
+        <div className="flex justify-center">
+          {showControlsHint ? (
+            <button
+              type="button"
+              onClick={onToggleControlsHint}
+              title="Click or press [H] to hide controls hints"
+              className="pointer-events-auto max-w-[95vw] rounded-md border border-white/10 bg-stone-950/45 px-2.5 py-1 text-center text-[10.5px] font-light tracking-wide text-stone-300 transition hover:border-white/25 hover:text-stone-100"
+            >
+              [WASD] Move · [Space] Jump · [Shift] Sprint · [E/Click] Interact · [B] Build · [Tab/I] Craft · [J] Journal · [M] Map · [H] Hide Hints
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onToggleControlsHint}
+              title="Press [H] to show controls"
+              className="pointer-events-auto rounded-md border border-white/10 bg-stone-950/35 px-2 py-0.5 text-[10px] font-light tracking-wider text-stone-400 transition hover:border-white/25 hover:text-stone-200"
+            >
+              [H] Controls
+            </button>
           )}
         </div>
       </div>

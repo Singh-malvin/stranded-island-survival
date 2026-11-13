@@ -11,6 +11,8 @@ export interface StructureMeshRecord {
   trapReadyMesh?: THREE.Mesh;
   dryHangMesh?: THREE.Mesh;
   forgeLight?: THREE.PointLight;
+  forgeEmberMesh?: THREE.Mesh;
+  forgeSmokeTimer?: number;
 }
 
 export function buildStructureMesh(
@@ -266,11 +268,13 @@ export function buildStructureMesh(
       const glow = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.28, 0.18), emberMat);
       glow.position.set(0, 0.68, 0.64);
       group.add(glow);
+      rec.forgeEmberMesh = glow;
 
-      const light = new THREE.PointLight(0xff6b1a, 1.8, 12, 1.5);
+      const light = new THREE.PointLight(0xff6b1a, 1.4, 12, 1.5);
       light.position.set(0, 0.9, 0.9);
       group.add(light);
       rec.forgeLight = light;
+      rec.forgeSmokeTimer = 0;
     }
     return rec;
   }

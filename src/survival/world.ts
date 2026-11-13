@@ -1,7 +1,7 @@
 // Pure world geography, sculpted spread-out terrain heightmap, Act 1/2/3 barrier gating,
 // zone classification, gate unlocking, and Fog-of-War map helpers. No Three.js or React imports.
 
-import { SAVE, WORLD } from './config.ts';
+import { COLLISION_TUNING, SAVE, WORLD } from './config.ts';
 import { countItem, removeItem } from './items.ts';
 import type { BarrierGateDef, MapZoneId, SurvivalState } from './types.ts';
 
@@ -454,15 +454,326 @@ export function tryUnlockGate(
   };
 }
 
+export type WorldCollider =
+  | {
+      kind: 'circle';
+      id: string;
+      x: number;
+      z: number;
+      radius: number;
+    }
+  | {
+      kind: 'obb';
+      id: string;
+      x: number;
+      z: number;
+      halfW: number;
+      halfD: number;
+      yaw: number;
+    };
+
+function buildStaticWorldColliders(): WorldCollider[] {
+  const list: WorldCollider[] = [
+    // Flight 404 Beach Wreckage (WORLD.WRECK_POS = { x: 38, z: 132 })
+    {
+      kind: 'obb',
+      id: 'wreck_fuselage',
+      x: WORLD.WRECK_POS.x,
+      z: WORLD.WRECK_POS.z,
+      halfW: 3.45,
+      halfD: 1.62,
+      yaw: 0.35,
+    },
+    {
+      kind: 'obb',
+      id: 'wreck_wing',
+      x: WORLD.WRECK_POS.x - 1.5,
+      z: WORLD.WRECK_POS.z + 2.6,
+      halfW: 3.8,
+      halfD: 1.15,
+      yaw: -0.4,
+    },
+    {
+      kind: 'circle',
+      id: 'wreck_engine',
+      x: WORLD.WRECK_POS.x - 2.2,
+      z: WORLD.WRECK_POS.z + 3.5,
+      radius: 0.95,
+    },
+    // Jungle Tail Section (WORLD.JUNGLE_TAIL_POS = { x: 48, z: -12 })
+    {
+      kind: 'obb',
+      id: 'tail_fuselage',
+      x: WORLD.JUNGLE_TAIL_POS.x,
+      z: WORLD.JUNGLE_TAIL_POS.z,
+      halfW: 2.75,
+      halfD: 1.45,
+      yaw: -0.35,
+    },
+    {
+      kind: 'obb',
+      id: 'tail_fin',
+      x: WORLD.JUNGLE_TAIL_POS.x - 1.6,
+      z: WORLD.JUNGLE_TAIL_POS.z + 0.35,
+      halfW: 0.55,
+      halfD: 2.15,
+      yaw: -0.35,
+    },
+    // Abandoned Camp timber shelter posts
+    {
+      kind: 'circle',
+      id: 'camp_post_w',
+      x: WORLD.ABANDONED_CAMP_POS.x - 1.4,
+      z: WORLD.ABANDONED_CAMP_POS.z,
+      radius: 0.3,
+    },
+    {
+      kind: 'circle',
+      id: 'camp_post_e',
+      x: WORLD.ABANDONED_CAMP_POS.x + 1.4,
+      z: WORLD.ABANDONED_CAMP_POS.z,
+      radius: 0.3,
+    },
+    // Ancient Stone Ruins altar
+    {
+      kind: 'obb',
+      id: 'ruins_altar',
+      x: WORLD.ANCIENT_RUINS_POS.x,
+      z: WORLD.ANCIENT_RUINS_POS.z,
+      halfW: 0.98,
+      halfD: 0.68,
+      yaw: 0,
+    },
+    // Research Station back & side hut walls (open south doorway preserved) + radio mast
+    {
+      kind: 'obb',
+      id: 'station_wall_back',
+      x: WORLD.RESEARCH_STATION_POS.x,
+      z: WORLD.RESEARCH_STATION_POS.z - 5.2,
+      halfW: 3.3,
+      halfD: 0.35,
+      yaw: 0,
+    },
+    {
+      kind: 'obb',
+      id: 'station_wall_west',
+      x: WORLD.RESEARCH_STATION_POS.x - 3.1,
+      z: WORLD.RESEARCH_STATION_POS.z - 2.7,
+      halfW: 0.35,
+      halfD: 2.7,
+      yaw: 0,
+    },
+    {
+      kind: 'obb',
+      id: 'station_wall_east',
+      x: WORLD.RESEARCH_STATION_POS.x + 3.1,
+      z: WORLD.RESEARCH_STATION_POS.z - 2.7,
+      halfW: 0.35,
+      halfD: 2.7,
+      yaw: 0,
+    },
+    {
+      kind: 'circle',
+      id: 'station_mast',
+      x: WORLD.RESEARCH_STATION_POS.x - 5.6,
+      z: WORLD.RESEARCH_STATION_POS.z - 3.8,
+      radius: 0.95,
+    },
+    // Station Repair Consoles (Radio, Generator, Chart desk)
+    {
+      kind: 'obb',
+      id: 'station_console_radio',
+      x: WORLD.RESEARCH_STATION_POS.x - 4.2,
+      z: WORLD.RESEARCH_STATION_POS.z + 2.4,
+      halfW: 0.95,
+      halfD: 0.52,
+      yaw: 0,
+    },
+    {
+      kind: 'obb',
+      id: 'station_console_generator',
+      x: WORLD.RESEARCH_STATION_POS.x + 4.4,
+      z: WORLD.RESEARCH_STATION_POS.z - 1.5,
+      halfW: 0.95,
+      halfD: 0.68,
+      yaw: 0,
+    },
+    {
+      kind: 'obb',
+      id: 'station_console_chart',
+      x: WORLD.RESEARCH_STATION_POS.x,
+      z: WORLD.RESEARCH_STATION_POS.z - 4.1,
+      halfW: 1.1,
+      halfD: 0.55,
+      yaw: 0,
+    },
+  ];
+
+  // Cave Grotto horseshoe basalt pillars (open south entrance)
+  for (let i = 0; i < 9; i++) {
+    const ang = Math.PI * 0.25 + (i / 8) * Math.PI * 1.5;
+    list.push({
+      kind: 'circle',
+      id: `cave_pillar_${i}`,
+      x: WORLD.CAVE_GROTTO_POS.x + Math.cos(ang) * 11.5,
+      z: WORLD.CAVE_GROTTO_POS.z + Math.sin(ang) * 11.5,
+      radius: 3.1,
+    });
+  }
+
+  // Ancient Ruins 6 perimeter stone pillars
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    list.push({
+      kind: 'circle',
+      id: `ruins_pillar_${i}`,
+      x: WORLD.ANCIENT_RUINS_POS.x + Math.cos(a) * 5.6,
+      z: WORLD.ANCIENT_RUINS_POS.z + Math.sin(a) * 5.6,
+      radius: 0.62,
+    });
+  }
+
+  return list;
+}
+
+export const WORLD_STATIC_COLLIDERS: WorldCollider[] = buildStaticWorldColliders();
+
+function resolveCircleVsCollider(
+  px: number,
+  pz: number,
+  radius: number,
+  col: WorldCollider
+): { x: number; z: number; hit: boolean } {
+  if (col.kind === 'circle') {
+    const dx = px - col.x;
+    const dz = pz - col.z;
+    const minDist = radius + col.radius;
+    const dSq = dx * dx + dz * dz;
+    if (dSq >= minDist * minDist) {
+      return { x: px, z: pz, hit: false };
+    }
+    const dist = Math.sqrt(dSq);
+    if (dist < 0.0001) {
+      return { x: col.x + minDist, z: col.z, hit: true };
+    }
+    const push = (minDist - dist) / dist;
+    return { x: px + dx * push, z: pz + dz * push, hit: true };
+  }
+
+  // Circle vs Oriented 2D Bounding Box (yaw matches Three.js mesh.rotation.y)
+  const cosY = Math.cos(col.yaw);
+  const sinY = Math.sin(col.yaw);
+  const dx = px - col.x;
+  const dz = pz - col.z;
+  const lx = dx * cosY - dz * sinY;
+  const lz = dx * sinY + dz * cosY;
+
+  const clampedX = Math.max(-col.halfW, Math.min(col.halfW, lx));
+  const clampedZ = Math.max(-col.halfD, Math.min(col.halfD, lz));
+  const offX = lx - clampedX;
+  const offZ = lz - clampedZ;
+  const distSq = offX * offX + offZ * offZ;
+
+  if (distSq >= radius * radius) {
+    return { x: px, z: pz, hit: false };
+  }
+
+  let pushLX = 0;
+  let pushLZ = 0;
+  if (distSq > 0.000001) {
+    const dist = Math.sqrt(distSq);
+    const pen = radius - dist;
+    pushLX = (offX / dist) * pen;
+    pushLZ = (offZ / dist) * pen;
+  } else {
+    // Center is inside box: push out along nearest box face
+    const penX = col.halfW - Math.abs(lx) + radius;
+    const penZ = col.halfD - Math.abs(lz) + radius;
+    if (penX < penZ) {
+      pushLX = lx >= 0 ? penX : -penX;
+    } else {
+      pushLZ = lz >= 0 ? penZ : -penZ;
+    }
+  }
+
+  // Transform push vector back from OBB local space to world space
+  const pushWX = pushLX * cosY + pushLZ * sinY;
+  const pushWZ = -pushLX * sinY + pushLZ * cosY;
+  return { x: px + pushWX, z: pz + pushWZ, hit: true };
+}
+
+export function resolveCollidersPushout(
+  px: number,
+  pz: number,
+  radius: number,
+  extraColliders: WorldCollider[] = []
+): { x: number; z: number; hit: boolean } {
+  let x = px;
+  let z = pz;
+  let hit = false;
+  for (let pass = 0; pass < 3; pass++) {
+    let anyPassHit = false;
+    for (let i = 0; i < WORLD_STATIC_COLLIDERS.length; i++) {
+      const r = resolveCircleVsCollider(x, z, radius, WORLD_STATIC_COLLIDERS[i]);
+      if (r.hit) {
+        x = r.x;
+        z = r.z;
+        hit = true;
+        anyPassHit = true;
+      }
+    }
+    for (let i = 0; i < extraColliders.length; i++) {
+      const r = resolveCircleVsCollider(x, z, radius, extraColliders[i]);
+      if (r.hit) {
+        x = r.x;
+        z = r.z;
+        hit = true;
+        anyPassHit = true;
+      }
+    }
+    if (!anyPassHit) break;
+  }
+  return { x, z, hit };
+}
+
+export function clampCameraClearance(
+  camX: number,
+  camY: number,
+  camZ: number,
+  extraColliders: WorldCollider[] = []
+): { x: number; y: number; z: number } {
+  const pushed = resolveCollidersPushout(
+    camX,
+    camZ,
+    COLLISION_TUNING.CAMERA_CLEARANCE_RADIUS,
+    extraColliders
+  );
+  const probeR = COLLISION_TUNING.CAMERA_CLEARANCE_RADIUS;
+  const maxGround = Math.max(
+    sampleIslandHeight(pushed.x, pushed.z),
+    sampleIslandHeight(pushed.x + probeR, pushed.z),
+    sampleIslandHeight(pushed.x - probeR, pushed.z),
+    sampleIslandHeight(pushed.x, pushed.z + probeR),
+    sampleIslandHeight(pushed.x, pushed.z - probeR)
+  );
+  return {
+    x: pushed.x,
+    y: Math.max(camY, maxGround + COLLISION_TUNING.CAMERA_MIN_TERRAIN_CLEARANCE),
+    z: pushed.z,
+  };
+}
+
 export interface MovementResolution {
   x: number;
   z: number;
   blockedByGate: BarrierGateDef | null;
   blockedByCliff: boolean;
+  blockedByObstacle?: boolean;
 }
 
 /**
- * Enforces island boundaries, steep basalt walls, and locked Act 1/2/3 gates.
+ * Enforces island boundaries, steep basalt walls with contour wall-sliding,
+ * solid wreckage/landmark/tree/rock/structure colliders, and locked Act 1/2/3 gates.
  */
 export function resolveWorldMovement(
   fromX: number,
@@ -470,94 +781,182 @@ export function resolveWorldMovement(
   toX: number,
   toZ: number,
   unlockedGates: string[],
-  waterLevel: number = WORLD.WATER_LEVEL
+  waterLevel: number = WORLD.WATER_LEVEL,
+  extraColliders: WorldCollider[] = []
 ): MovementResolution {
-  let nx = toX;
-  let nz = toZ;
+  const totalDx = toX - fromX;
+  const totalDz = toZ - fromZ;
+  const totalDist = Math.hypot(totalDx, totalDz);
+  const steps = totalDist <= 0.0001 ? 1 : Math.min(24, Math.max(1, Math.ceil(totalDist / 0.35)));
+
+  let cx = fromX;
+  let cz = fromZ;
   let blockedByGate: BarrierGateDef | null = null;
   let blockedByCliff = false;
+  let blockedByObstacle = false;
 
-  // 1. Keep player within outer coastal swim boundary
-  const maxSwimDist = WORLD.ISLAND_RADIUS * 0.86;
-  const dist = Math.hypot(nx, nz);
-  if (dist > maxSwimDist) {
-    const scale = maxSwimDist / dist;
-    nx *= scale;
-    nz *= scale;
-  }
-
-  // 2. Prevent swimming into deep abyss
-  const targetH = sampleIslandHeight(nx, nz);
-  const curH = sampleIslandHeight(fromX, fromZ);
-  if (targetH < waterLevel - 1.7) {
-    nx = fromX;
-    nz = fromZ;
-  }
-
-  // 3. Enforce all locked Barrier Gates
-  const playerPad = 0.8;
-  for (const gate of ISLAND_GATES) {
-    if (unlockedGates.includes(gate.id)) continue;
-    const minX = gate.x - gate.halfWidth - playerPad;
-    const maxX = gate.x + gate.halfWidth + playerPad;
-    const minZ = gate.z - gate.halfDepth - playerPad;
-    const maxZ = gate.z + gate.halfDepth + playerPad;
-    if (nx >= minX && nx <= maxX && nz >= minZ && nz <= maxZ) {
-      blockedByGate = gate;
-      const penLeft = Math.abs(nx - minX);
-      const penRight = Math.abs(maxX - nx);
-      const penSouth = Math.abs(maxZ - nz);
-      const penNorth = Math.abs(nz - minZ);
-      const minPen = Math.min(penLeft, penRight, penSouth, penNorth);
-      if (minPen === penSouth) nz = maxZ;
-      else if (minPen === penNorth) nz = minZ;
-      else if (minPen === penLeft) nx = minX;
-      else nx = maxX;
-    }
-  }
-
-  // 4. Hard progression seal across Basalt Spine Ridge if no Act-2 gate is unlocked
   const act2Gates = ISLAND_GATES.filter((g) => g.unlockAct === 2);
-  const inUnlockedAct2Pass = act2Gates.some(
-    (g) => unlockedGates.includes(g.id) && Math.abs(nx - g.x) <= g.halfWidth
-  );
-  const ridgeFrontZ = WORLD.ACT1_RIDGE_Z + 1.8;
-  if (fromZ >= ridgeFrontZ - 0.6 && nz < ridgeFrontZ && !inUnlockedAct2Pass) {
-    if (!blockedByGate) {
-      const nearGate = act2Gates.find(
-        (g) => !unlockedGates.includes(g.id) && Math.abs(nx - g.x) <= g.halfWidth + 3.5
-      );
-      if (nearGate) blockedByGate = nearGate;
-      else blockedByCliff = true;
-    }
-    nz = Math.max(nz, ridgeFrontZ);
-  }
-
-  // 5. Hard seal at Station 3 Perimeter Fence unless gate_research_station unlocked
   const stationGate = ISLAND_GATES.find((g) => g.id === 'gate_research_station');
-  const stationFrontZ = WORLD.STATION_GATE_Z + 1.8;
-  if (
-    stationGate &&
-    !unlockedGates.includes(stationGate.id) &&
-    fromZ >= stationFrontZ - 0.6 &&
-    nz < stationFrontZ &&
-    Math.abs(nx - stationGate.x) <= 22
-  ) {
-    if (!blockedByGate) blockedByGate = stationGate;
-    nz = Math.max(nz, stationFrontZ);
+  const maxSwimDist = WORLD.ISLAND_RADIUS * 0.86;
+  const playerPad = 0.8;
+
+  const enforceGatesAndBounds = (px: number, pz: number, refX: number, refZ: number) => {
+    let nx = px;
+    let nz = pz;
+
+    const dist = Math.hypot(nx, nz);
+    if (dist > maxSwimDist) {
+      const scale = maxSwimDist / dist;
+      nx *= scale;
+      nz *= scale;
+    }
+
+    if (sampleIslandHeight(nx, nz) < waterLevel - 1.7) {
+      nx = refX;
+      nz = refZ;
+    }
+
+    for (const gate of ISLAND_GATES) {
+      if (unlockedGates.includes(gate.id)) continue;
+      const minX = gate.x - gate.halfWidth - playerPad;
+      const maxX = gate.x + gate.halfWidth + playerPad;
+      const minZ = gate.z - gate.halfDepth - playerPad;
+      const maxZ = gate.z + gate.halfDepth + playerPad;
+      if (nx >= minX && nx <= maxX && nz >= minZ && nz <= maxZ) {
+        blockedByGate = gate;
+        const penLeft = Math.abs(nx - minX);
+        const penRight = Math.abs(maxX - nx);
+        const penSouth = Math.abs(maxZ - nz);
+        const penNorth = Math.abs(nz - minZ);
+        const minPen = Math.min(penLeft, penRight, penSouth, penNorth);
+        if (minPen === penSouth) nz = maxZ;
+        else if (minPen === penNorth) nz = minZ;
+        else if (minPen === penLeft) nx = minX;
+        else nx = maxX;
+      }
+    }
+
+    const inUnlockedAct2Pass = act2Gates.some(
+      (g) => unlockedGates.includes(g.id) && Math.abs(nx - g.x) <= g.halfWidth
+    );
+    const ridgeFrontZ = WORLD.ACT1_RIDGE_Z + 1.8;
+    if (refZ >= ridgeFrontZ - 0.6 && nz < ridgeFrontZ && !inUnlockedAct2Pass) {
+      if (!blockedByGate) {
+        const nearGate = act2Gates.find(
+          (g) => !unlockedGates.includes(g.id) && Math.abs(nx - g.x) <= g.halfWidth + 3.5
+        );
+        if (nearGate) blockedByGate = nearGate;
+        else blockedByCliff = true;
+      }
+      nz = Math.max(nz, ridgeFrontZ);
+    }
+
+    const stationFrontZ = WORLD.STATION_GATE_Z + 1.8;
+    if (
+      stationGate &&
+      !unlockedGates.includes(stationGate.id) &&
+      refZ >= stationFrontZ - 0.6 &&
+      nz < stationFrontZ &&
+      Math.abs(nx - stationGate.x) <= 22
+    ) {
+      if (!blockedByGate) blockedByGate = stationGate;
+      nz = Math.max(nz, stationFrontZ);
+    }
+
+    return { x: nx, z: nz };
+  };
+
+  const stepDx = totalDx / steps;
+  const stepDz = totalDz / steps;
+
+  for (let s = 0; s < steps; s++) {
+    const stepTargetX = cx + stepDx;
+    const stepTargetZ = cz + stepDz;
+
+    // 1. Bounds & locked Progression Gates
+    let next = enforceGatesAndBounds(stepTargetX, stepTargetZ, cx, cz);
+
+    // 2. Smooth mountain/cliff slope guard with contour sliding (never freeze unless wedged)
+    const stepD = Math.hypot(next.x - cx, next.z - cz);
+    if (stepD > 0.0005) {
+      const curH = sampleIslandHeight(cx, cz);
+      const nextH = sampleIslandHeight(next.x, next.z);
+      const uphillRise = nextH - curH;
+
+      // Also probe 0.42m ahead along heading so tiny delta frames still detect steep walls cleanly
+      const dirX = (next.x - cx) / stepD;
+      const dirZ = (next.z - cz) / stepD;
+      const probeDist = 0.42;
+      const aheadH = sampleIslandHeight(cx + dirX * probeDist, cz + dirZ * probeDist);
+      const stepSlope = uphillRise / stepD;
+      const aheadSlope = (aheadH - curH) / probeDist;
+
+      if (
+        (uphillRise > 0.01 && stepSlope > COLLISION_TUNING.MAX_SLOPE_RISE_PER_M) ||
+        (aheadH - curH > 0.25 && aheadSlope > COLLISION_TUNING.MAX_SLOPE_RISE_PER_M)
+      ) {
+        blockedByCliff = true;
+
+        // Compute mountain contour gradient to slide tangentially along slope base
+        const eps = 0.45;
+        const gradX =
+          (sampleIslandHeight(cx + eps, cz) - sampleIslandHeight(cx - eps, cz)) / (2 * eps);
+        const gradZ =
+          (sampleIslandHeight(cx, cz + eps) - sampleIslandHeight(cx, cz - eps)) / (2 * eps);
+        const gradLen = Math.hypot(gradX, gradZ);
+
+        let slid = false;
+        if (gradLen > 0.05) {
+          const nxGrad = gradX / gradLen;
+          const nzGrad = gradZ / gradLen;
+          const intoWall = (next.x - cx) * nxGrad + (next.z - cz) * nzGrad;
+          if (intoWall > 0) {
+            const slideX = next.x - nxGrad * intoWall * 1.05;
+            const slideZ = next.z - nzGrad * intoWall * 1.05;
+            const slideDist = Math.hypot(slideX - cx, slideZ - cz);
+            if (slideDist > 0.0005) {
+              const sH = sampleIslandHeight(slideX, slideZ);
+              if (sH - curH <= COLLISION_TUNING.MAX_SLOPE_RISE_PER_M * slideDist) {
+                next = enforceGatesAndBounds(slideX, slideZ, cx, cz);
+                slid = true;
+              }
+            }
+          }
+        }
+        if (!slid) {
+          next = { x: cx, z: cz };
+        }
+      }
+    }
+
+    // 3. Solid Wreckage / Landmarks / Trees / Rocks / Placed Structure Circle-vs-OBB pushout
+    const push = resolveCollidersPushout(
+      next.x,
+      next.z,
+      COLLISION_TUNING.PLAYER_RADIUS,
+      extraColliders
+    );
+    if (push.hit) {
+      blockedByObstacle = true;
+      const guarded = enforceGatesAndBounds(push.x, push.z, cx, cz);
+      // Do not allow an obstacle pushout to shove player up an impassable cliff
+      const pDist = Math.hypot(guarded.x - cx, guarded.z - cz);
+      const curH = sampleIslandHeight(cx, cz);
+      const pH = sampleIslandHeight(guarded.x, guarded.z);
+      if (pDist > 0.001 && (pH - curH) / pDist > COLLISION_TUNING.MAX_SLOPE_RISE_PER_M * 1.25) {
+        cx = cx;
+        cz = cz;
+      } else {
+        cx = guarded.x;
+        cz = guarded.z;
+      }
+    } else {
+      cx = next.x;
+      cz = next.z;
+    }
   }
 
-  // 6. Steep cliff guard everywhere else on the island (cannot climb vertical walls)
-  const stepDist = Math.hypot(nx - fromX, nz - fromZ);
-  const resolvedH = sampleIslandHeight(nx, nz);
-  const dh = resolvedH - curH;
-  if (stepDist > 0.001 && dh > 1.0 && dh / Math.max(0.15, stepDist) > 1.45) {
-    blockedByCliff = true;
-    nx = fromX;
-    nz = fromZ;
-  }
-
-  return { x: nx, z: nz, blockedByGate, blockedByCliff };
+  return { x: cx, z: cz, blockedByGate, blockedByCliff, blockedByObstacle };
 }
 
 export function cellKeyForPos(

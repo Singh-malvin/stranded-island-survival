@@ -317,9 +317,9 @@ export function evaluateAct1Objectives(state: SurvivalState): ObjectiveStep[] {
     {
       id: 'act1_tools',
       act: 1,
-      title: 'Craft First Stone Tools',
+      title: 'Gather Wood & Craft First Stone Tools',
       detail:
-        'Trek west to the Tide Pools for Sharp Flint, gather driftwood & plant fibre, then craft a Stone Hatchet & Flint Pickaxe.',
+        'Collect Fallen Branches off the ground, gather Tide-Pool Flint & Plant Fibre, craft a Stone Hatchet & Flint Pickaxe, then chop Palm & Pine trees for Timber Logs.',
       progressText: `${(hasHatchet ? 1 : 0) + (hasPick ? 1 : 0)}/2 tools`,
       completed: toolsDone,
     },
@@ -423,9 +423,9 @@ export function evaluateAct2Objectives(state: SurvivalState): ObjectiveStep[] {
     {
       id: 'act2_forge',
       act: 2,
-      title: 'Build a Stone Forge & Smelt Alloy Ingots',
+      title: 'Build a Stone Forge, Cure Driftwood & Smelt Alloy',
       detail:
-        'Construct a Stone Charcoal Forge [B] at base and smelt salvaged scrap or iron ore into structural Alloy Ingots.',
+        'Build a Stone Charcoal Forge [B], open it [E] to feed Timber Logs or Fallen Branches for kiln-dried Driftwood, and smelt Alloy Ingots.',
       progressText: `${(hasForge ? 1 : 0) + (hasIngots ? 1 : 0)}/2`,
       completed: hasForge && hasIngots,
     },

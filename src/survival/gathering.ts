@@ -44,8 +44,8 @@ export interface GatherNodeMeta {
 export const GATHER_NODE_META: Record<GatherNodeType, GatherNodeMeta> = {
   driftwood: {
     type: 'driftwood',
-    label: 'Sun-Bleached Driftwood',
-    promptVerb: 'Gather',
+    label: 'Fallen Wood Branches',
+    promptVerb: 'Collect',
     maxHealth: 2,
     yields: [{ itemId: 'stick', count: 2 }],
     sound: 'chop',
@@ -115,6 +115,7 @@ export const GATHER_NODE_META: Record<GatherNodeType, GatherNodeMeta> = {
     requiredTool: { kind: 'axe', minTier: 1 },
     yields: [
       { itemId: 'log', count: 2 },
+      { itemId: 'stick', count: 1 },
       { itemId: 'palm_frond', count: 2 },
       { itemId: 'coconut', count: 1 },
     ],

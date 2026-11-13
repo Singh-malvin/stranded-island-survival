@@ -336,3 +336,109 @@ export const VOYAGE = {
   /** Hull damage reduction multiplier when crew selects "Brace Hull". */
   BRACE_DAMAGE_MULT: 0.28,
 };
+
+// ---------------------------------------------------------------------------
+// VISUAL OVERHAUL — GRAPHICS, TERRAIN SPLAT/GRASS, COLLISION, FORGE & HUD TUNING
+// ---------------------------------------------------------------------------
+export const GRAPHICS_TUNING = {
+  /** Base atmospheric exponential fog density in clear daylight. */
+  BASE_FOG_DENSITY: 0.0021,
+  /** Peak exponential fog density during tropical storms. */
+  STORM_FOG_DENSITY: 0.0058,
+  /** Physical Sky shader defaults blended across time of day. */
+  SKY_TURBIDITY_DAY: 2.2,
+  SKY_TURBIDITY_DUSK: 7.4,
+  SKY_RAYLEIGH_DAY: 1.18,
+  SKY_RAYLEIGH_DUSK: 2.55,
+  SKY_MIE_COEFFICIENT: 0.0032,
+  SKY_MIE_DIRECTIONAL_G: 0.82,
+  /** Layered volumetric-look cloud cover speed & density. */
+  CLOUD_DRIFT_SPEED: 0.011,
+  CLOUD_COVERAGE_CLEAR: 0.42,
+  CLOUD_COVERAGE_STORM: 0.86,
+  /** Cascaded Shadow Maps config (High / Ultra). */
+  CSM_CASCADES: 3,
+  CSM_MAX_FAR: 175,
+  /** Reflection render-target resolution (width/height) for ocean planar mirror. */
+  WATER_REFLECTION_SIZE: 512,
+  /** In-game hour delta threshold before refreshing procedural sky PMREM IBL probe. */
+  IBL_REFRESH_HOURS: 0.28,
+  /** Bloom post-processing (high HDR threshold so only true emissives/glints bloom). */
+  BLOOM_STRENGTH: 0.14,
+  BLOOM_RADIUS: 0.30,
+  BLOOM_THRESHOLD: 1.18,
+  /** Screen-space Ambient Occlusion pass parameters. */
+  SSAO_KERNEL_RADIUS: 1.05,
+  SSAO_MIN_DISTANCE: 0.00028,
+  SSAO_MAX_DISTANCE: 0.0075,
+  /** Subtle edge lens aberration, grain & vignette. */
+  CHROMATIC_ABERRATION_OFFSET: 0.0014,
+  FILM_GRAIN_INTENSITY: 0.022,
+  VIGNETTE_DARKNESS: 0.24,
+  /** Optional Depth of Field focus distance & aperture (Ultra). */
+  DOF_FOCUS_DISTANCE: 22.0,
+  DOF_APERTURE: 0.000045,
+  DOF_MAX_BLUR: 0.0045,
+  /** Floating sunlit dust motes count & hot-day shimmer. */
+  DUST_MOTE_COUNT: 140,
+  HEAT_SHIMMER_TEMP_C: 29.0,
+  HEAT_SHIMMER_STRENGTH: 0.0018,
+} as const;
+
+export const TERRAIN_TUNING = {
+  /** Elevation above Y=0 sea level stayed darkened as wet wave-wash sand. */
+  WET_SAND_MAX_Y: 0.55,
+  /** Transition zone boundaries blending rippled dry sand -> soil/pebbles -> grass (with FBM noise). */
+  SAND_TO_GRASS_START_Y: 1.42,
+  SAND_TO_GRASS_END_Y: 3.10,
+  /** Minimum world height and normal slope threshold where basalt rock cliffs dominate. */
+  ROCK_CLIFF_MIN_Y: 6.2,
+  ROCK_SLOPE_COS_THRESHOLD: 0.72,
+  /** World-space UV repeat frequencies per material class. */
+  SAND_UV_SCALE: 0.22,
+  GRASS_UV_SCALE: 0.18,
+  ROCK_UV_SCALE: 0.16,
+  BARK_UV_SCALE: 0.45,
+  WOOD_UV_SCALE: 0.62,
+  METAL_UV_SCALE: 0.35,
+  /** Base 3D instanced grass blade count (scaled by quality preset grassDensity). */
+  GRASS_BLADE_BASE_COUNT: 48000,
+  GRASS_MIN_HEIGHT: 0.22,
+  GRASS_MAX_HEIGHT: 0.56,
+  GRASS_WIND_SPEED: 1.85,
+  GRASS_LOD_FADE_START: 46,
+  GRASS_LOD_FADE_END: 84,
+  /** Natural ground scatter prop budgets (scaled cleanly with grass/detail density). */
+  GROUND_DETAIL_SHELLS: 460,
+  GROUND_DETAIL_PEBBLES: 680,
+  GROUND_DETAIL_TWIGS: 300,
+  GROUND_DETAIL_FERNS: 420,
+} as const;
+
+export const COLLISION_TUNING = {
+  /** Horizontal player collision cylinder radius (meters). */
+  PLAYER_RADIUS: 0.44,
+  /** Default tree trunk collision radius (meters). */
+  TREE_TRUNK_RADIUS: 0.42,
+  /** Maximum terrain vertical step delta per horizontal meter considered walkable without blocking. */
+  MAX_SLOPE_RISE_PER_M: 1.08,
+  /** Minimum horizontal clearance maintained around camera vs solid walls. */
+  CAMERA_CLEARANCE_RADIUS: 0.3,
+  /** Minimum vertical clearance kept between camera eye and sampled ground/cliff surface. */
+  CAMERA_MIN_TERRAIN_CLEARANCE: 0.42,
+} as const;
+
+export const FORGE_TUNING = {
+  /** Seconds required for the Stone Forge to kiln-cure 1 raw Wood into 1 Driftwood. */
+  WOOD_TO_DRIFTWOOD_SEC: 6.0,
+  /** Maximum queued wood logs/sticks buffered inside a single forge kiln at once. */
+  MAX_QUEUE_WOOD: 12,
+  /** Active kiln ember glow peak intensity and smoke particle emission cadence. */
+  EMBER_GLOW_INTENSITY: 2.6,
+  SMOKE_SPAWN_INTERVAL_SEC: 0.22,
+} as const;
+
+export const HUD_TUNING = {
+  /** Controls hint bar automatically fades away after this many seconds (toggle anytime with H). */
+  HINT_AUTO_HIDE_SEC: 180,
+} as const;

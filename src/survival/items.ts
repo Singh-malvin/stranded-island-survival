@@ -14,10 +14,11 @@ export const ITEM_DEFS: Record<ItemId, ItemDef> = {
   // --- Raw resources ---
   stick: {
     id: 'stick',
-    name: 'Driftwood Branch',
+    name: 'Fallen Branch',
     category: 'resource',
-    description: 'Dry seasoned wood gathered from the tideline or underbrush. Used for tool shafts and kindling.',
-    icon: '🪵',
+    description:
+      'Seasoned wood branches collected off the ground or from felled trees. Craft tools or insert into a Stone Forge to kiln-cure Driftwood.',
+    icon: '🥢',
     stack: INVENTORY.DEFAULT_STACK,
     loseOnDeath: true,
   },
@@ -25,7 +26,8 @@ export const ITEM_DEFS: Record<ItemId, ItemDef> = {
     id: 'log',
     name: 'Timber Log',
     category: 'resource',
-    description: 'Heavy trunk felled from a palm or hardwood tree with an axe.',
+    description:
+      'Heavy raw wood felled from palm and pine trees with an axe. Mill into planks or cure inside a Stone Forge for Driftwood.',
     icon: '🌲',
     stack: 15,
     loseOnDeath: true,
@@ -174,6 +176,16 @@ export const ITEM_DEFS: Record<ItemId, ItemDef> = {
     description: 'Squared timber board cut at a workbench.',
     icon: '📏',
     stack: 20,
+    loseOnDeath: true,
+  },
+  driftwood: {
+    id: 'driftwood',
+    name: 'Driftwood',
+    category: 'resource',
+    description:
+      'Dense kiln-seasoned hardwood forged from raw Wood (Timber Logs or Fallen Branches). Crafts sturdy torches, planks, spears, and forge charcoal.',
+    icon: '🪵',
+    stack: INVENTORY.DEFAULT_STACK,
     loseOnDeath: true,
   },
   metal_ingot: {

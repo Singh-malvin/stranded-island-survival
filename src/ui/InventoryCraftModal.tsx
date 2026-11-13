@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Hammer, Flame, Backpack, CheckCircle2, Lock } from 'lucide-react';
 import { INVENTORY } from '../survival/config.ts';
-import { countItem, ITEM_DEFS } from '../survival/items.ts';
+import { countItem, getInitialDurability, ITEM_DEFS } from '../survival/items.ts';
 import { checkRecipeAvailability, RECIPES } from '../survival/recipes.ts';
 import { CraftStation, CraftTier, SurvivalState } from '../survival/types.ts';
+import { FloatingItemTooltip, HoverTooltipData } from './ItemTooltip.tsx';
 
 interface InventoryCraftModalProps {
   isOpen: boolean;
@@ -30,6 +31,13 @@ export const InventoryCraftModal: React.FC<InventoryCraftModalProps> = ({
 }) => {
   const [selectedSlotIdx, setSelectedSlotIdx] = useState<number | null>(null);
   const [activeTier, setActiveTier] = useState<CraftTier>(1);
+  const [hoverInfo, setHoverInfo] = useState<HoverTooltipData | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setHoverInfo(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -127,31 +135,52 @@ export const InventoryCraftModal: React.FC<InventoryCraftModalProps> = ({
                 {inventory.slice(0, INVENTORY.HOTBAR_SIZE).map((slot, idx) => {
                   const def = slot ? ITEM_DEFS[slot.itemId] : null;
                   const isPicked = selectedSlotIdx === idx;
+                  const maxDur = slot ? getInitialDurability(slot.itemId) : undefined;
                   return (
                     <button
                       key={idx}
                       type="button"
                       onClick={() => handleSlotClick(idx)}
-                      className={`relative flex h-14 flex-col items-center justify-center rounded-lg border transition ${
+                      onMouseEnter={(e) =>
+                        slot && setHoverInfo({ slot, x: e.clientX, y: e.clientY })
+                      }
+                      onMouseMove={(e) =>
+                        slot && setHoverInfo({ slot, x: e.clientX, y: e.clientY })
+                      }
+                      onMouseLeave={() => setHoverInfo(null)}
+                      className={`relative flex h-[74px] flex-col items-center justify-between rounded-lg border px-1 py-1.5 transition ${
                         isPicked
                           ? 'border-amber-400 bg-amber-950/50 ring-2 ring-amber-400/40'
                           : 'border-stone-700 bg-stone-900 hover:border-stone-500'
                       }`}
                     >
-                      <span className="absolute left-1.5 top-1 text-[10px] font-mono text-stone-400">
-                        {idx + 1}
-                      </span>
+                      <div className="flex w-full items-center justify-between px-0.5 text-[10px] leading-none">
+                        <span className="font-mono text-stone-400">{idx + 1}</span>
+                        {slot && slot.count > 1 ? (
+                          <span className="font-bold text-stone-200">{slot.count}</span>
+                        ) : (
+                          <span />
+                        )}
+                      </div>
                       {def ? (
                         <>
-                          <span className="text-xl">{def.icon}</span>
-                          {slot && slot.count > 1 && (
-                            <span className="absolute bottom-1 right-1.5 text-xs font-bold text-stone-200">
-                              {slot.count}
-                            </span>
+                          <span className="text-xl leading-none">{def.icon}</span>
+                          <span className="w-full truncate text-center text-[9.5px] font-medium leading-tight text-stone-300">
+                            {def.name}
+                          </span>
+                          {slot?.durability !== undefined && maxDur && (
+                            <div className="absolute bottom-0.5 left-1.5 right-1.5 h-0.5 overflow-hidden rounded-full bg-stone-700">
+                              <div
+                                className="h-full bg-amber-400"
+                                style={{
+                                  width: `${Math.max(0, Math.min(100, Math.round((slot.durability / maxDur) * 100)))}%`,
+                                }}
+                              />
+                            </div>
                           )}
                         </>
                       ) : (
-                        <span className="text-[10px] text-stone-600">—</span>
+                        <span className="my-auto text-[10px] text-stone-600">—</span>
                       )}
                     </button>
                   );
@@ -168,24 +197,47 @@ export const InventoryCraftModal: React.FC<InventoryCraftModalProps> = ({
                   const idx = offset + INVENTORY.HOTBAR_SIZE;
                   const def = slot ? ITEM_DEFS[slot.itemId] : null;
                   const isPicked = selectedSlotIdx === idx;
+                  const maxDur = slot ? getInitialDurability(slot.itemId) : undefined;
                   return (
                     <button
                       key={idx}
                       type="button"
                       onClick={() => handleSlotClick(idx)}
-                      className={`relative flex h-14 flex-col items-center justify-center rounded-lg border transition ${
+                      onMouseEnter={(e) =>
+                        slot && setHoverInfo({ slot, x: e.clientX, y: e.clientY })
+                      }
+                      onMouseMove={(e) =>
+                        slot && setHoverInfo({ slot, x: e.clientX, y: e.clientY })
+                      }
+                      onMouseLeave={() => setHoverInfo(null)}
+                      className={`relative flex h-[72px] flex-col items-center justify-between rounded-lg border px-1 py-1.5 transition ${
                         isPicked
                           ? 'border-amber-400 bg-amber-950/50 ring-2 ring-amber-400/40'
                           : 'border-stone-800 bg-stone-900/75 hover:border-stone-600'
                       }`}
                     >
+                      <div className="flex w-full justify-end px-0.5 text-[10px] leading-none">
+                        {slot && slot.count > 1 ? (
+                          <span className="font-bold text-stone-200">{slot.count}</span>
+                        ) : (
+                          <span className="h-2.5" />
+                        )}
+                      </div>
                       {def ? (
                         <>
-                          <span className="text-xl">{def.icon}</span>
-                          {slot && slot.count > 1 && (
-                            <span className="absolute bottom-1 right-1.5 text-xs font-bold text-stone-200">
-                              {slot.count}
-                            </span>
+                          <span className="text-xl leading-none">{def.icon}</span>
+                          <span className="w-full truncate text-center text-[9.5px] font-medium leading-tight text-stone-300">
+                            {def.name}
+                          </span>
+                          {slot?.durability !== undefined && maxDur && (
+                            <div className="absolute bottom-0.5 left-1.5 right-1.5 h-0.5 overflow-hidden rounded-full bg-stone-700">
+                              <div
+                                className="h-full bg-amber-400"
+                                style={{
+                                  width: `${Math.max(0, Math.min(100, Math.round((slot.durability / maxDur) * 100)))}%`,
+                                }}
+                              />
+                            </div>
                           )}
                         </>
                       ) : null}
@@ -195,51 +247,46 @@ export const InventoryCraftModal: React.FC<InventoryCraftModalProps> = ({
               </div>
             </div>
 
-            {/* Selected Item Details */}
-            <div className="mt-auto rounded-lg border border-stone-800 bg-stone-900/80 p-4">
+            {/* Selected Slot Quick Actions */}
+            <div className="mt-auto rounded-lg border border-stone-800 bg-stone-900/80 px-3.5 py-2.5">
               {inspectedDef && inspectedSlot ? (
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-2xl">{inspectedDef.icon}</span>
-                      <div>
-                        <div className="text-sm font-bold text-stone-100">
-                          {inspectedDef.name} (x{inspectedSlot.count})
-                        </div>
-                        <div className="text-[11px] uppercase tracking-wider text-stone-400">
-                          {inspectedDef.category}
-                          {inspectedSlot.durability !== undefined
-                            ? ` • Durability: ${Math.ceil(inspectedSlot.durability)}`
-                            : ''}
-                        </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xl">{inspectedDef.icon}</span>
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-bold text-stone-100">
+                        {inspectedDef.name} (x{inspectedSlot.count})
+                      </div>
+                      <div className="text-[11px] text-stone-400">
+                        Hover any slot for recipes & full info • Click another slot to swap
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      {inspectedDef.food && (
-                        <button
-                          type="button"
-                          onClick={() => onConsumeSlot(inspectedIdx)}
-                          className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-bold text-stone-950 hover:bg-amber-400"
-                        >
-                          Consume
-                        </button>
-                      )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {inspectedDef.food && (
                       <button
                         type="button"
-                        onClick={() => onDropSlot(inspectedIdx)}
-                        className="rounded-md border border-stone-700 bg-stone-800 px-2.5 py-1.5 text-xs text-stone-300 hover:border-red-500/60 hover:text-red-300"
+                        onClick={() => onConsumeSlot(inspectedIdx)}
+                        className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-bold text-stone-950 hover:bg-amber-400"
                       >
-                        Discard
+                        Consume
                       </button>
-                    </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHoverInfo(null);
+                        onDropSlot(inspectedIdx);
+                      }}
+                      className="rounded-md border border-stone-700 bg-stone-800 px-2.5 py-1.5 text-xs text-stone-300 hover:border-red-500/60 hover:text-red-300"
+                    >
+                      Discard
+                    </button>
                   </div>
-                  <p className="text-xs leading-relaxed text-stone-300">
-                    {inspectedDef.description}
-                  </p>
                 </div>
               ) : (
                 <div className="text-xs text-stone-500">
-                  Select any slot above to inspect, consume, or move items.
+                  Hover any item for recipes & details, or click a slot to swap / use / discard.
                 </div>
               )}
             </div>
@@ -378,6 +425,7 @@ export const InventoryCraftModal: React.FC<InventoryCraftModalProps> = ({
           </div>
         </div>
       </div>
+      <FloatingItemTooltip hover={hoverInfo} />
     </div>
   );
 };

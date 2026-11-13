@@ -3,7 +3,33 @@
  */
 
 import { addItem, countItem, ITEM_DEFS, removeItem } from './items.ts';
-import { CraftStation, InventorySlot, Recipe, RecipeIngredient } from './types.ts';
+import { CraftStation, InventorySlot, ItemId, Recipe, RecipeIngredient } from './types.ts';
+
+export interface ItemRecipeUsage {
+  recipeId: string;
+  recipeName: string;
+  resultName: string;
+}
+
+const recipeUsageCache = new Map<ItemId, ItemRecipeUsage[]>();
+
+/** Returns every crafting recipe that uses `itemId` as an ingredient (memoized). */
+export function getRecipesUsingItem(itemId: ItemId): ItemRecipeUsage[] {
+  const cached = recipeUsageCache.get(itemId);
+  if (cached) return cached;
+  const uses: ItemRecipeUsage[] = [];
+  for (const r of RECIPES) {
+    if (r.ingredients.some((ing) => ing.itemId === itemId)) {
+      uses.push({
+        recipeId: r.id,
+        recipeName: r.name,
+        resultName: ITEM_DEFS[r.result.itemId].name,
+      });
+    }
+  }
+  recipeUsageCache.set(itemId, uses);
+  return uses;
+}
 
 export const RECIPES: Recipe[] = [
   // =========================================================================
@@ -155,6 +181,18 @@ export const RECIPES: Recipe[] = [
     ],
     description: 'Crush soothing jungle herbs in plant wrap. Restores health and cures viper venom or poisoning.',
   },
+  {
+    id: 'driftwood_torch',
+    name: 'Seasoned Driftwood Torch',
+    tier: 1,
+    station: 'hands',
+    result: { itemId: 'torch', count: 1 },
+    ingredients: [
+      { itemId: 'driftwood', count: 1 },
+      { itemId: 'fibre', count: 1 },
+    ],
+    description: 'Slow-burning torch built from kiln-seasoned Driftwood.',
+  },
 
   // =========================================================================
   // TIER 2 — IMPROVED (Requires Workbench)
@@ -167,6 +205,28 @@ export const RECIPES: Recipe[] = [
     result: { itemId: 'plank', count: 2 },
     ingredients: [{ itemId: 'log', count: 1 }],
     description: 'Split a heavy timber log into flat structural boards.',
+  },
+  {
+    id: 'driftwood_planks',
+    name: 'Seasoned Driftwood Planks (x2)',
+    tier: 2,
+    station: 'workbench',
+    result: { itemId: 'plank', count: 2 },
+    ingredients: [{ itemId: 'driftwood', count: 2 }],
+    description: 'Mill forge-seasoned Driftwood into weather-resistant boat & bench planks.',
+  },
+  {
+    id: 'driftwood_spear',
+    name: 'Balanced Driftwood Spear',
+    tier: 2,
+    station: 'workbench',
+    result: { itemId: 'spear', count: 1 },
+    ingredients: [
+      { itemId: 'driftwood', count: 2 },
+      { itemId: 'flint', count: 1 },
+      { itemId: 'rope', count: 1 },
+    ],
+    description: 'Carve hardened kiln Driftwood into a straight, durable hunting & reef spear.',
   },
   {
     id: 'machete',
@@ -273,6 +333,15 @@ export const RECIPES: Recipe[] = [
       { itemId: 'coal', count: 1 },
     ],
     description: 'Refine mined ferric rock with coal embers into twin Alloy Ingots.',
+  },
+  {
+    id: 'driftwood_charcoal',
+    name: 'Kiln Hardwood Coal (x2)',
+    tier: 3,
+    station: 'forge',
+    result: { itemId: 'coal', count: 2 },
+    ingredients: [{ itemId: 'driftwood', count: 1 }],
+    description: 'Reduce dense forge-cured Driftwood into hot charcoal briquettes for Alloy smelting.',
   },
 ];
 

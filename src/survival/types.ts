@@ -52,6 +52,7 @@ export type ItemId =
   // Processed
   | 'rope'
   | 'plank'
+  | 'driftwood'
   | 'metal_ingot'
   // Food & water & medical
   | 'coconut'
@@ -356,6 +357,12 @@ export interface StructureDef {
   station?: CraftStation;
 }
 
+export interface ForgeQueueState {
+  inputWood: number;
+  progressSec: number;
+  outputDriftwood: number;
+}
+
 export interface PlacedStructure {
   id: string;
   type: StructureType;
@@ -372,6 +379,7 @@ export interface PlacedStructure {
   trapProgress?: number;
   dryItem?: 'raw_fish' | 'raw_meat' | null;
   dryProgress?: number;
+  forgeQueue?: ForgeQueueState;
 }
 
 export interface SurvivalState {
