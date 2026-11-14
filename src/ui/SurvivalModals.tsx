@@ -1,13 +1,21 @@
 import React from 'react';
 import { Flame, Compass, Skull, RotateCcw, Play, ShieldAlert, Sparkles } from 'lucide-react';
-import { GRAPHICS_PRESETS, GraphicsQuality } from '../scene/GraphicsConfig.ts';
+import {
+  ExtendedGraphicsSettings,
+  FpsLimitOption,
+  GRAPHICS_PRESETS,
+  GraphicsQuality,
+  ViewDistancePreset,
+} from '../scene/GraphicsConfig.ts';
 import { SurvivalState } from '../survival/types.ts';
 
 interface TitleScreenProps {
   hasSavedGame: boolean;
   savedDay: number;
   graphicsQuality: GraphicsQuality;
+  extSettings?: ExtendedGraphicsSettings;
   onChangeGraphicsQuality: (q: GraphicsQuality) => void;
+  onChangeExtendedSettings?: (partial: Partial<ExtendedGraphicsSettings>) => void;
   onContinue: () => void;
   onStartNew: (difficulty: 'survivor' | 'hardcore') => void;
 }
@@ -18,7 +26,9 @@ export const SurvivalTitleScreen: React.FC<TitleScreenProps> = ({
   hasSavedGame,
   savedDay,
   graphicsQuality,
+  extSettings,
   onChangeGraphicsQuality,
+  onChangeExtendedSettings,
   onContinue,
   onStartNew,
 }) => {
@@ -86,14 +96,30 @@ export const SurvivalTitleScreen: React.FC<TitleScreenProps> = ({
               <Sparkles className="h-3.5 w-3.5 text-amber-400" />
               Graphics Quality
             </span>
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1">
+              {onChangeExtendedSettings && (
+                <button
+                  type="button"
+                  onClick={() => onChangeExtendedSettings({ autoQuality: true })}
+                  className={`rounded px-2 py-1 text-[11px] font-bold uppercase ${
+                    extSettings?.autoQuality
+                      ? 'bg-emerald-500 text-stone-950'
+                      : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                  }`}
+                >
+                  Auto
+                </button>
+              )}
               {QUALITY_ORDER.map((q) => (
                 <button
                   key={q}
                   type="button"
-                  onClick={() => onChangeGraphicsQuality(q)}
+                  onClick={() => {
+                    onChangeExtendedSettings?.({ autoQuality: false });
+                    onChangeGraphicsQuality(q);
+                  }}
                   className={`rounded px-2.5 py-1 text-[11px] font-bold uppercase ${
-                    graphicsQuality === q
+                    !extSettings?.autoQuality && graphicsQuality === q
                       ? 'bg-amber-500 text-stone-950'
                       : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
                   }`}
@@ -112,11 +138,11 @@ export const SurvivalTitleScreen: React.FC<TitleScreenProps> = ({
           <div className="font-semibold text-stone-200">Survival Controls</div>
           <div className="mt-1 grid grid-cols-2 gap-1.5">
             <span>• [WASD] Move / Swim</span>
-            <span>• [Shift] Sprint</span>
+            <span>• [Shift] Sprint • [Ctrl/C] Crouch</span>
             <span>• [E / Left Click] Gather / Drink</span>
             <span>• [Tab / I] Pack & Crafting</span>
             <span>• [1–6] Select Hotbar Slot</span>
-            <span>• [F] Eat / Drink Equipped Item</span>
+            <span>• [F] Eat / Drink • [F3] Perf Overlay</span>
           </div>
         </div>
       </div>
@@ -128,7 +154,9 @@ interface PauseModalProps {
   isOpen: boolean;
   state: SurvivalState;
   graphicsQuality: GraphicsQuality;
+  extSettings?: ExtendedGraphicsSettings;
   onChangeGraphicsQuality: (q: GraphicsQuality) => void;
+  onChangeExtendedSettings?: (partial: Partial<ExtendedGraphicsSettings>) => void;
   onResume: () => void;
   onRestart: () => void;
 }
@@ -137,11 +165,25 @@ export const SurvivalPauseModal: React.FC<PauseModalProps> = ({
   isOpen,
   state,
   graphicsQuality,
+  extSettings,
   onChangeGraphicsQuality,
+  onChangeExtendedSettings,
   onResume,
   onRestart,
 }) => {
   if (!isOpen) return null;
+
+  const fpsOptions: Array<{ label: string; value: FpsLimitOption }> = [
+    { label: '30 FPS', value: 30 },
+    { label: '60 FPS', value: 60 },
+    { label: 'Uncapped', value: 0 },
+  ];
+
+  const viewDistOptions: Array<{ label: string; value: ViewDistancePreset }> = [
+    { label: 'Near', value: 'near' },
+    { label: 'Medium', value: 'medium' },
+    { label: 'Far', value: 'far' },
+  ];
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/75 p-4 font-sans text-stone-100">
@@ -152,20 +194,36 @@ export const SurvivalPauseModal: React.FC<PauseModalProps> = ({
           {state.stats.itemsCrafted}
         </p>
 
-        <div className="mt-4 rounded-lg border border-stone-800 bg-stone-900/80 p-3 text-xs">
+        <div className="mt-4 flex flex-col gap-3 rounded-lg border border-stone-800 bg-stone-900/80 p-3 text-xs">
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-1.5 font-semibold text-stone-200">
               <Sparkles className="h-3.5 w-3.5 text-amber-400" />
               Graphics Preset
             </span>
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1">
+              {onChangeExtendedSettings && (
+                <button
+                  type="button"
+                  onClick={() => onChangeExtendedSettings({ autoQuality: true })}
+                  className={`rounded px-2 py-1 text-[11px] font-bold uppercase ${
+                    extSettings?.autoQuality
+                      ? 'bg-emerald-500 text-stone-950'
+                      : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                  }`}
+                >
+                  Auto
+                </button>
+              )}
               {QUALITY_ORDER.map((q) => (
                 <button
                   key={q}
                   type="button"
-                  onClick={() => onChangeGraphicsQuality(q)}
+                  onClick={() => {
+                    onChangeExtendedSettings?.({ autoQuality: false });
+                    onChangeGraphicsQuality(q);
+                  }}
                   className={`rounded px-2.5 py-1 text-[11px] font-bold uppercase ${
-                    graphicsQuality === q
+                    !extSettings?.autoQuality && graphicsQuality === q
                       ? 'bg-amber-500 text-stone-950'
                       : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
                   }`}
@@ -175,9 +233,87 @@ export const SurvivalPauseModal: React.FC<PauseModalProps> = ({
               ))}
             </div>
           </div>
-          <p className="mt-1.5 text-[11px] leading-snug text-stone-400">
+          <p className="text-[11px] leading-snug text-stone-400">
             {GRAPHICS_PRESETS[graphicsQuality].description}
           </p>
+
+          {extSettings && onChangeExtendedSettings && (
+            <>
+              <div className="flex items-center justify-between border-t border-stone-800 pt-2">
+                <span className="font-medium text-stone-300">Frame Rate Limit</span>
+                <div className="flex gap-1">
+                  {fpsOptions.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => onChangeExtendedSettings({ fpsLimit: opt.value })}
+                      className={`rounded px-2 py-0.5 text-[10.5px] font-semibold ${
+                        extSettings.fpsLimit === opt.value
+                          ? 'bg-cyan-500 text-stone-950'
+                          : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between border-t border-stone-800 pt-2">
+                <span className="font-medium text-stone-300">Battery Saver (30 FPS + Low Power)</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeExtendedSettings({ batterySaver: !extSettings.batterySaver })
+                  }
+                  className={`rounded px-2.5 py-0.5 text-[10.5px] font-bold uppercase ${
+                    extSettings.batterySaver
+                      ? 'bg-emerald-500 text-stone-950'
+                      : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                  }`}
+                >
+                  {extSettings.batterySaver ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between border-t border-stone-800 pt-2">
+                <span className="font-medium text-stone-300">
+                  Render Scale ({Math.round(extSettings.renderScale * 100)}%)
+                </span>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={1.0}
+                  step={0.05}
+                  value={extSettings.renderScale}
+                  onChange={(e) =>
+                    onChangeExtendedSettings({ renderScale: Number(e.target.value) })
+                  }
+                  className="w-28 accent-amber-400"
+                />
+              </div>
+
+              <div className="flex items-center justify-between border-t border-stone-800 pt-2">
+                <span className="font-medium text-stone-300">View Distance</span>
+                <div className="flex gap-1">
+                  {viewDistOptions.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => onChangeExtendedSettings({ viewDistance: opt.value })}
+                      className={`rounded px-2 py-0.5 text-[10.5px] font-semibold ${
+                        extSettings.viewDistance === opt.value
+                          ? 'bg-amber-500 text-stone-950'
+                          : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="mt-4 flex flex-col gap-2.5">

@@ -22,11 +22,11 @@ import {
   Compass,
   AlertTriangle,
 } from 'lucide-react';
-import { HoveredTargetInfo } from '../scene/SurvivalScene3D.ts';
-import { INVENTORY, TEMPERATURE } from '../survival/config.ts';
+import { HoveredTargetInfo, ScenePerformanceMetrics } from '../scene/SurvivalScene3D.ts';
+import { GRAPHICS_TUNING, INVENTORY, TEMPERATURE } from '../survival/config.ts';
 import { getEquipped, getInitialDurability, ITEM_DEFS } from '../survival/items.ts';
 import { FloatingItemTooltip, HoverTooltipData } from './ItemTooltip.tsx';
-import { computeAmbientTempC, formatClock } from '../survival/needs.ts';
+import { computeAmbientTempC, formatClock, getBodyTempStage } from '../survival/needs.ts';
 import {
   evaluateObjectivesForAct,
   getActLabel,
@@ -41,15 +41,24 @@ import {
 } from '../survival/types.ts';
 import { getZoneAt, ISLAND_ZONES } from '../survival/world.ts';
 
+export interface PickupToastItem {
+  id: string;
+  text: string;
+  icon?: string;
+}
+
 interface SurvivalHUDProps {
   state: SurvivalState;
   playerContext: PlayerContext;
   hoveredTarget: HoveredTargetInfo | null;
   statusMessage: string | null;
+  pickupToasts?: PickupToastItem[];
   saveBadgeText?: string | null;
   activeBuildType?: StructureType | null;
   nearbyStations?: ReadonlySet<CraftStation>;
   fps?: number;
+  perfMetrics?: ScenePerformanceMetrics | null;
+  showPerfOverlay?: boolean;
   showDebug?: boolean;
   damageFlash: boolean;
   isMuted: boolean;
@@ -77,10 +86,13 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
   playerContext,
   hoveredTarget,
   statusMessage,
+  pickupToasts = [],
   saveBadgeText,
   activeBuildType,
   nearbyStations,
   fps,
+  perfMetrics,
+  showPerfOverlay = false,
   showDebug,
   damageFlash,
   isMuted,
@@ -109,9 +121,12 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
   const equipped = getEquipped(inventory, selectedSlot);
   const currentZone = ISLAND_ZONES[getZoneAt(state.player.x, state.player.z)];
 
-  const isLowHealth = needs.health < 35;
+  const tempStage = getBodyTempStage(needs.temperature);
+  const isLowHealth = needs.health < GRAPHICS_TUNING.LOW_HEALTH_VIGNETTE_THRESHOLD;
   const isCold = needs.temperature < TEMPERATURE.COLD_FEEDBACK_C;
   const isHypothermic = needs.temperature < TEMPERATURE.HYPOTHERMIA_C;
+  const tempTrendArrow =
+    needs.tempTrend === 'warming' ? '↑' : needs.tempTrend === 'cooling' ? '↓' : '';
 
   const actSteps = evaluateObjectivesForAct(state);
   const actLabel = getActLabel(state.act);
@@ -203,7 +218,7 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
                     : 'text-stone-300'
               }
             >
-              Core {needs.temperature.toFixed(1)}°C
+              Core {needs.temperature.toFixed(1)}°C {tempTrendArrow && <span className="text-amber-300">{tempTrendArrow}</span>}
             </span>
           </div>
 
@@ -251,9 +266,27 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
               )}
               {needs.sickness > 0 && (
                 <span className="inline-flex items-center gap-1 rounded border border-lime-500/35 bg-lime-950/60 px-1.5 py-0.5 text-[10px] font-medium text-lime-300">
-                  <AlertTriangle className="h-2.5 w-2.5" /> Sick ({Math.ceil(needs.sickness)}s)
+                  <AlertTriangle className="h-2.5 w-2.5" /> Sick: {needs.sicknessCause ?? 'Raw Meat'} ({Math.ceil(needs.sickness)}s)
                 </span>
               )}
+            </div>
+          )}
+
+          {/* Phase 5.6: F3 Performance Overlay */}
+          {showPerfOverlay && perfMetrics && (
+            <div className="mt-1 rounded-md border border-cyan-500/40 bg-stone-950/85 px-2.5 py-1.5 font-mono text-[10px] leading-relaxed text-cyan-200 shadow-lg">
+              <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-0.5 font-semibold text-cyan-300">
+                <span>PERF MONITOR [F3]</span>
+                <span>{perfMetrics.fps} FPS ({perfMetrics.frameTimeMs.toFixed(1)} ms)</span>
+              </div>
+              <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[9.5px] text-stone-300">
+                <span>Draw Calls: <b className="text-stone-100">{perfMetrics.drawCalls}</b></span>
+                <span>Triangles: <b className="text-stone-100">{perfMetrics.triangles.toLocaleString()}</b></span>
+                <span>Textures: <b className="text-stone-100">{perfMetrics.textures}</b></span>
+                <span>Memory: <b className="text-stone-100">{perfMetrics.memoryMB} MB</b></span>
+                <span>Render Scale: <b className="text-stone-100">{perfMetrics.renderScale}%</b></span>
+                <span>FPS Cap: <b className="text-stone-100">{perfMetrics.fpsLimit === 0 ? 'Uncapped' : perfMetrics.fpsLimit}</b></span>
+              </div>
             </div>
           )}
         </div>
@@ -485,14 +518,28 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
                       : 'text-stone-200'
                 }
               >
-                {needs.temperature.toFixed(1)}°C{' '}
-                {isHypothermic ? '· Freezing' : isCold ? '· Cold' : '· Stable'}
+                {needs.temperature.toFixed(1)}°C {tempTrendArrow && <span className="text-amber-300">{tempTrendArrow}</span>}{' '}
+                · {tempStage.stage}
               </span>
             </div>
           </div>
 
-          {/* Bottom-Center 6-Slot Quick Hotbar */}
+          {/* Bottom-Center 6-Slot Quick Hotbar + Item Pickup Pop-ups */}
           <div className="pointer-events-auto flex flex-col items-center gap-1">
+            {pickupToasts.length > 0 && (
+              <div className="pointer-events-none mb-0.5 flex flex-col items-center gap-1">
+                {pickupToasts.map((toast) => (
+                  <div
+                    key={toast.id}
+                    className="flex animate-bounce items-center gap-1.5 rounded-md border border-emerald-400/50 bg-stone-950/85 px-2.5 py-0.5 text-[11px] font-semibold tracking-wide text-emerald-300 shadow-lg transition-all duration-300"
+                  >
+                    {toast.icon && <span>{toast.icon}</span>}
+                    <span>{toast.text}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {equipped.def && (
               <div className="flex items-center gap-2 rounded-md border border-white/10 bg-stone-950/50 px-2.5 py-0.5 text-[11px] font-medium tracking-wide text-stone-200">
                 <span>{equipped.def.name}</span>

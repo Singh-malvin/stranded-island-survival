@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { BASE_BUILDING, BOAT, FORGE_TUNING, NEEDS, NODE_RESPAWN_HOURS, TIME, VOYAGE, WORLD } from './config.ts';
+import { BASE_BUILDING, BOAT, FORGE_TUNING, NEEDS, NODE_RESPAWN_HOURS, TEMPERATURE, TIME, VOYAGE, WATER, WORLD } from './config.ts';
 import {
   addItem,
   countItem,
@@ -16,6 +16,8 @@ import {
   computeAmbientTempC,
   computeTargetBodyTempC,
   consumeInventorySlot,
+  drinkSeawater,
+  getBodyTempStage,
   interactFreshwaterSpring,
   respawnAtLastBed,
   stepWeather,
@@ -1114,5 +1116,121 @@ describe('Fix 5 & Fix 6 — Recipe Usage Lookup & Wood -> Forge -> Driftwood Kil
     const crafted = craftRecipeById('driftwood_charcoal', state.inventory, new Set(['forge']), state.flags);
     assert.equal(crafted.ok, true);
     assert.equal(countItem(crafted.inventory, 'coal'), 2);
+  });
+});
+
+describe('Phase 3 — Freshwater Pond Walkable Slope, Sickness Rules & 5-Stage Hypothermia', () => {
+  it('allows walking smoothly into and out of the Freshwater Spring pond from all 4 directions', () => {
+    const sx = WORLD.SPRING_POS.x;
+    const sz = WORLD.SPRING_POS.z;
+
+    const dirs = [
+      { dx: 1, dz: 0, label: 'East' },
+      { dx: -1, dz: 0, label: 'West' },
+      { dx: 0, dz: 1, label: 'South' },
+      { dx: 0, dz: -1, label: 'North' },
+    ];
+
+    for (const d of dirs) {
+      let x = sx;
+      let z = sz;
+      for (let step = 0; step < 20; step++) {
+        const res = resolveWorldMovement(x, z, x + d.dx * 0.45, z + d.dz * 0.45, []);
+        x = res.x;
+        z = res.z;
+      }
+      assert.ok(
+        Math.hypot(x - sx, z - sz) > 7.5,
+        `Player failed to walk out of pond toward ${d.label}`
+      );
+    }
+  });
+
+  it('never causes sickness from freshwater pond, while dirty water, seawater, and raw meat set explicit sicknessCause', () => {
+    assert.equal(WATER.FRESH_SICK_CHANCE, 0);
+
+    let state = createInitialSurvivalState();
+    state.needs.thirst = 30;
+    const springDrink = interactFreshwaterSpring(state, () => 0.0); // even lowest RNG roll must not sicken
+    assert.equal(springDrink.gotSick, false);
+    assert.equal(springDrink.state.needs.sickness, 0);
+
+    const seaRes = drinkSeawater(state);
+    assert.equal(seaRes.gotSick, true);
+    assert.equal(seaRes.state.needs.sicknessCause, 'Sea Water');
+    assert.ok(seaRes.state.needs.thirst < state.needs.thirst);
+
+    let dirtyState = createInitialSurvivalState();
+    dirtyState.inventory = addItem(dirtyState.inventory, 'water_bottle_dirty', 1).inventory;
+    const dirtySlot = dirtyState.inventory.findIndex((s) => s?.itemId === 'water_bottle_dirty');
+    const dirtyRes = consumeInventorySlot(dirtyState, dirtySlot, () => 0.01);
+    assert.equal(dirtyRes.gotSick, true);
+    assert.equal(dirtyRes.state.needs.sicknessCause, 'Dirty Water');
+
+    let rawState = createInitialSurvivalState();
+    rawState.inventory = addItem(rawState.inventory, 'raw_meat', 1).inventory;
+    const rawSlot = rawState.inventory.findIndex((s) => s?.itemId === 'raw_meat');
+    const rawRes = consumeInventorySlot(rawState, rawSlot, () => 0.01);
+    assert.equal(rawRes.gotSick, true);
+    assert.equal(rawRes.state.needs.sicknessCause, 'Raw Meat');
+  });
+
+  it('progresses body temperature down to 32.0°C across 5 stages and warms up with fire or hot food/boiled water', () => {
+    assert.equal(TEMPERATURE.MIN_BODY_C, 32.0);
+    assert.equal(getBodyTempStage(37.0).stage, 'Normal');
+    assert.equal(getBodyTempStage(36.0).stage, 'Chilly');
+    assert.equal(getBodyTempStage(35.0).stage, 'Cold');
+    assert.equal(getBodyTempStage(33.8).stage, 'Hypothermic');
+    assert.equal(getBodyTempStage(32.5).stage, 'Severe');
+
+    // Cold night storm while wet and swimming pushes target body temp down to 32.0°C
+    const coldTarget = computeTargetBodyTempC(
+      14,
+      { kind: 'storm', rain: 0.9, wind: 0.95 },
+      100,
+      {
+        isMoving: false,
+        isSprinting: false,
+        isSwimming: true,
+        nearFire: false,
+        sheltered: false,
+        holdingLitTorch: false,
+      }
+    );
+    assert.equal(coldTarget, 32.0);
+
+    // Ticking needs in freezing conditions cools body temp below 35°C and sets cooling trend
+    let needs = createInitialSurvivalState().needs;
+    for (let i = 0; i < 60; i++) {
+      const stepped = tickNeeds(
+        needs,
+        2.0,
+        14,
+        { kind: 'storm', rain: 0.9, wind: 0.95 },
+        {
+          isMoving: false,
+          isSprinting: false,
+          isSwimming: true,
+          nearFire: false,
+          sheltered: false,
+          holdingLitTorch: false,
+        }
+      );
+      needs = stepped.needs;
+      if (i === 5) {
+        assert.equal(needs.tempTrend, 'cooling');
+      }
+    }
+    assert.ok(needs.temperature < 32.5, `Expected core temp < 32.5°C, got ${needs.temperature.toFixed(2)}°C`);
+    assert.equal(getBodyTempStage(needs.temperature).stage, 'Severe');
+
+    // Consuming boiled water warms core temperature toward 37°C
+    let coldState = createInitialSurvivalState();
+    coldState.needs = { ...needs, temperature: 34.0 };
+    coldState.inventory = addItem(coldState.inventory, 'water_bottle_clean', 1).inventory;
+    const cleanSlot = coldState.inventory.findIndex((s) => s?.itemId === 'water_bottle_clean');
+    const warmRes = consumeInventorySlot(coldState, cleanSlot);
+    assert.ok(warmRes.state.needs.temperature > 34.5);
+    assert.equal(warmRes.state.needs.tempTrend, 'warming');
   });
 });

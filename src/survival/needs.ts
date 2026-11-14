@@ -163,6 +163,79 @@ export function computeAmbientTempC(clock: GameClock, weather: WeatherState): nu
   return Math.round(temp * 10) / 10;
 }
 
+export type BodyTempStageName = 'Normal' | 'Chilly' | 'Cold' | 'Hypothermic' | 'Severe';
+
+export interface BodyTempStageInfo {
+  stage: BodyTempStageName;
+  speedMult: number;
+  staminaRegenMult: number;
+  shivering: boolean;
+  frostIntensity: number;
+  blurredEdges: boolean;
+}
+
+/**
+ * Maps core body temperature (37°C -> 32°C) to survival stages:
+ * - 37°C — Normal (>= 36.5°C)
+ * - 36°C — Chilly (35.5°C – 36.49°C): cold warning on HUD
+ * - 35°C — Cold (34.5°C – 35.49°C): shivering, slower stamina regen
+ * - 34°C — Hypothermic (33.0°C – 34.49°C): blurred screen edges, slow movement, slow health drain
+ * - 32°C — Severe (< 33.0°C, down to 32.0°C): heavy screen frost, faster health drain
+ */
+export function getBodyTempStage(tempC: number): BodyTempStageInfo {
+  if (tempC >= TEMPERATURE.STAGE_NORMAL_C) {
+    return {
+      stage: 'Normal',
+      speedMult: 1.0,
+      staminaRegenMult: 1.0,
+      shivering: false,
+      frostIntensity: 0,
+      blurredEdges: false,
+    };
+  }
+  if (tempC >= TEMPERATURE.STAGE_CHILLY_C) {
+    return {
+      stage: 'Chilly',
+      speedMult: 0.98,
+      staminaRegenMult: 0.92,
+      shivering: false,
+      frostIntensity: 0.12,
+      blurredEdges: false,
+    };
+  }
+  if (tempC >= TEMPERATURE.STAGE_COLD_C) {
+    const t = (TEMPERATURE.STAGE_CHILLY_C - tempC) / (TEMPERATURE.STAGE_CHILLY_C - TEMPERATURE.STAGE_COLD_C);
+    return {
+      stage: 'Cold',
+      speedMult: 0.90,
+      staminaRegenMult: 0.65,
+      shivering: true,
+      frostIntensity: 0.22 + t * 0.22,
+      blurredEdges: false,
+    };
+  }
+  if (tempC >= TEMPERATURE.STAGE_HYPOTHERMIC_C) {
+    const t = (TEMPERATURE.STAGE_COLD_C - tempC) / (TEMPERATURE.STAGE_COLD_C - TEMPERATURE.STAGE_HYPOTHERMIC_C);
+    return {
+      stage: 'Hypothermic',
+      speedMult: 0.76,
+      staminaRegenMult: 0.42,
+      shivering: true,
+      frostIntensity: 0.48 + t * 0.27,
+      blurredEdges: true,
+    };
+  }
+  const t = Math.min(1, Math.max(0, (TEMPERATURE.STAGE_HYPOTHERMIC_C - tempC) / 1.0));
+  return {
+    stage: 'Severe',
+    speedMult: 0.62,
+    staminaRegenMult: 0.25,
+    shivering: true,
+    frostIntensity: 0.78 + t * 0.22,
+    blurredEdges: true,
+  };
+}
+
 export function computeTargetBodyTempC(
   ambientC: number,
   ctx: PlayerContext,
@@ -184,16 +257,18 @@ export function computeTargetBodyTempC(
   }
 
   if (effectiveAmbient < TEMPERATURE.COMFORT_MIN_C) {
-    return (
+    const wetPenalty = !ctx.nearFire ? (wetness / 100) * TEMPERATURE.WET_MAX_PENALTY_C : 0;
+    const raw =
       TEMPERATURE.NORMAL_BODY_C -
-      (TEMPERATURE.COMFORT_MIN_C - effectiveAmbient) * TEMPERATURE.COLD_TARGET_SLOPE
-    );
+      (TEMPERATURE.COMFORT_MIN_C - effectiveAmbient) * TEMPERATURE.COLD_TARGET_SLOPE -
+      wetPenalty;
+    return Math.max(TEMPERATURE.MIN_BODY_C, raw);
   }
   if (effectiveAmbient > TEMPERATURE.COMFORT_MAX_C) {
-    return (
+    const raw =
       TEMPERATURE.NORMAL_BODY_C +
-      (effectiveAmbient - TEMPERATURE.COMFORT_MAX_C) * TEMPERATURE.HEAT_TARGET_SLOPE
-    );
+      (effectiveAmbient - TEMPERATURE.COMFORT_MAX_C) * TEMPERATURE.HEAT_TARGET_SLOPE;
+    return Math.min(TEMPERATURE.MAX_BODY_C, raw);
   }
   return TEMPERATURE.NORMAL_BODY_C;
 }
@@ -233,9 +308,17 @@ export function tickNeeds(
   const isSick = next.sickness > 0;
   if (next.sickness > 0) {
     next.sickness = Math.max(0, next.sickness - realDtSec);
+    if (next.sickness <= 0) {
+      next.sicknessCause = undefined;
+    } else if (!next.sicknessCause) {
+      next.sicknessCause = 'Raw Meat';
+    }
+  } else {
+    next.sicknessCause = undefined;
   }
 
-  // 3. Stamina
+  // 3. Stamina (affected by low hunger/thirst and Cold/Hypothermic stages)
+  const tempStagePre = getBodyTempStage(next.temperature);
   if (ctx.isSprinting && ctx.isMoving) {
     next.stamina = Math.max(0, next.stamina - realDtSec * NEEDS.STAMINA_SPRINT_DRAIN_PER_SEC);
   } else if (ctx.isSwimming && ctx.isMoving) {
@@ -243,7 +326,8 @@ export function tickNeeds(
   } else {
     const lowNeeds =
       next.hunger < NEEDS.LOW_NEED_THRESHOLD || next.thirst < NEEDS.LOW_NEED_THRESHOLD;
-    const regenMult = lowNeeds ? NEEDS.STAMINA_REGEN_LOW_NEEDS_MULT : 1.0;
+    const regenMult =
+      (lowNeeds ? NEEDS.STAMINA_REGEN_LOW_NEEDS_MULT : 1.0) * tempStagePre.staminaRegenMult;
     next.stamina = Math.min(
       100,
       next.stamina + realDtSec * NEEDS.STAMINA_REGEN_PER_SEC * regenMult
@@ -265,11 +349,16 @@ export function tickNeeds(
       dtMin * NEEDS.THIRST_DRAIN_PER_MIN * sprintMult * heatMult * sickMult * diff.drainMult
   );
 
-  // 5. Body temperature
+  // 5. Body temperature (clamped 32.0°C to 41.5°C, with warming/cooling trend)
   const targetBodyC = computeTargetBodyTempC(ambientC, ctx, next.wetness);
+  const tempDiff = targetBodyC - next.temperature;
+  next.tempTrend = tempDiff > 0.08 ? 'warming' : tempDiff < -0.08 ? 'cooling' : 'stable';
   const blend = Math.min(1, realDtSec * TEMPERATURE.BODY_DRIFT_RATE);
+  const blendedTemp = next.temperature + tempDiff * blend;
   next.temperature =
-    Math.round((next.temperature + (targetBodyC - next.temperature) * blend) * 100) / 100;
+    Math.round(
+      Math.max(TEMPERATURE.MIN_BODY_C, Math.min(TEMPERATURE.MAX_BODY_C, blendedTemp)) * 100
+    ) / 100;
 
   // 6. Health drain / recovery
   let healthDelta = 0;
@@ -285,8 +374,9 @@ export function tickNeeds(
   }
   if (next.temperature < TEMPERATURE.HYPOTHERMIA_C) {
     const degBelow = TEMPERATURE.HYPOTHERMIA_C - next.temperature;
+    const severeBoost = next.temperature < TEMPERATURE.STAGE_HYPOTHERMIC_C ? 1.35 : 1.0;
     healthDelta -=
-      dtMin * degBelow * TEMPERATURE.COLD_DAMAGE_PER_MIN_PER_DEG * diff.damageMult;
+      dtMin * degBelow * TEMPERATURE.COLD_DAMAGE_PER_MIN_PER_DEG * severeBoost * diff.damageMult;
     if (!primaryCause) primaryCause = 'hypothermia in the night cold';
   } else if (next.temperature > TEMPERATURE.HEATSTROKE_C) {
     const degAbove = next.temperature - TEMPERATURE.HEATSTROKE_C;
@@ -377,16 +467,45 @@ export function consumeInventorySlot(
   let gotSick = false;
   if (def.id === 'medicinal_poultice') {
     needs.sickness = 0;
+    needs.sicknessCause = undefined;
   } else if (def.food.sickChance && rng() < def.food.sickChance) {
     needs.sickness = SICKNESS.DURATION_SEC;
+    needs.sicknessCause =
+      def.id === 'water_bottle_dirty'
+        ? 'Dirty Water'
+        : def.id === 'raw_meat'
+          ? 'Raw Meat'
+          : def.id === 'raw_fish'
+            ? 'Raw Fish'
+            : def.name;
     gotSick = true;
+  }
+
+  // Eating warm/cooked food or drinking boiled water warms core body temperature toward 37.0°C
+  if (
+    def.id === 'cooked_meat' ||
+    def.id === 'cooked_fish' ||
+    def.id === 'cooked_crab' ||
+    def.id === 'water_bottle_clean' ||
+    def.id === 'jerky'
+  ) {
+    if (needs.temperature < TEMPERATURE.NORMAL_BODY_C) {
+      needs.temperature =
+        Math.round(
+          Math.min(
+            TEMPERATURE.NORMAL_BODY_C,
+            needs.temperature + TEMPERATURE.WARM_CONSUME_BOOST_C
+          ) * 100
+        ) / 100;
+      needs.tempTrend = 'warming';
+    }
   }
 
   const message =
     def.id === 'medicinal_poultice'
       ? 'Applied Herbal Healing Poultice (+28 Health, cured venom & food poisoning).'
       : gotSick
-        ? `Consumed ${def.name} — your stomach churns with food poisoning! Boil water and cook meat over a fire.`
+        ? `Consumed ${def.name} — Sick: ${needs.sicknessCause ?? def.name}! Boil water and cook meat over a fire.`
         : `Consumed ${def.name}.`;
 
   return {
@@ -449,23 +568,47 @@ export function interactFreshwaterSpring(
     };
   }
 
-  // Otherwise drink directly from the stream with a small risk of sickness
+  // Otherwise drink directly from the freshwater pond (safe, FRESH_SICK_CHANCE = 0)
   const needs: Needs = {
     ...state.needs,
     thirst: Math.min(100, state.needs.thirst + WATER.FRESH_DRINK_THIRST),
   };
   let gotSick = false;
-  if (rng() < WATER.FRESH_SICK_CHANCE) {
+  if (WATER.FRESH_SICK_CHANCE > 0 && rng() < WATER.FRESH_SICK_CHANCE) {
     needs.sickness = SICKNESS.DURATION_SEC;
+    needs.sicknessCause = 'Stagnant Water';
     gotSick = true;
   }
 
   return {
     state: { ...state, needs },
     message: gotSick
-      ? 'Drank raw stream water — contracted mild parasites! Boil water in a bottle at a campfire.'
-      : 'Cupped your hands and drank cool spring water (+22 Thirst).',
+      ? 'Drank stagnant water — contracted parasites! Boil water in a bottle at a campfire.'
+      : 'Cupped your hands and drank cool, clean freshwater from the spring (+22 Thirst).',
     gotSick,
+  };
+}
+
+export function drinkSeawater(state: SurvivalState): {
+  state: SurvivalState;
+  message: string;
+  gotSick: boolean;
+} {
+  const needs: Needs = {
+    ...state.needs,
+    thirst: Math.max(0, state.needs.thirst + WATER.SEA_DRINK_THIRST),
+    health: Math.max(0, state.needs.health - WATER.SEA_DRINK_DAMAGE),
+    sickness: SICKNESS.DURATION_SEC,
+    sicknessCause: 'Sea Water',
+  };
+  return {
+    state: {
+      ...state,
+      needs,
+      alive: needs.health > 0,
+    },
+    message: 'Drank salty sea water — Sick: Sea Water! Dehydration and nausea worsen.',
+    gotSick: true,
   };
 }
 

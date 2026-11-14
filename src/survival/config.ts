@@ -85,8 +85,18 @@ export const NEEDS = {
 // ---------------------------------------------------------------------------
 export const TEMPERATURE = {
   NORMAL_BODY_C: 37.0,
+  /** Minimum core body temperature reachable in severe cold/wet storms (°C). */
+  MIN_BODY_C: 32.0,
+  /** Maximum core body temperature reachable in extreme heat (°C). */
+  MAX_BODY_C: 41.5,
+  /** Hypothermia stage thresholds (°C): 37 Normal -> 36 Chilly -> 35 Cold -> 34 Hypothermic -> 32 Severe. */
+  STAGE_NORMAL_C: 36.5,
+  STAGE_CHILLY_C: 35.5,
+  STAGE_COLD_C: 34.5,
+  STAGE_HYPOTHERMIC_C: 33.0,
+  STAGE_SEVERE_C: 32.0,
   /** Below this body temp the player takes cold damage (hypothermia). */
-  HYPOTHERMIA_C: 35.0,
+  HYPOTHERMIA_C: 34.5,
   /** Above this body temp the player takes heat damage (heatstroke). */
   HEATSTROKE_C: 39.2,
   /** "Cold" feedback (frost vignette, visible breath) starts below this. */
@@ -95,7 +105,9 @@ export const TEMPERATURE = {
   COLD_DAMAGE_PER_MIN_PER_DEG: 7,
   HEAT_DAMAGE_PER_MIN_PER_DEG: 5,
   /** How quickly body temp moves toward its target (fraction per real second). */
-  BODY_DRIFT_RATE: 0.012,
+  BODY_DRIFT_RATE: 0.032,
+  /** Direct core body °C boost when consuming warm/cooked food or boiled water. */
+  WARM_CONSUME_BOOST_C: 0.65,
 
   /** Ambient air model: coldest at COLDEST_HOUR, warmest 12h later. */
   AMBIENT_MEAN_C: 24,
@@ -106,7 +118,7 @@ export const TEMPERATURE = {
   COMFORT_MIN_C: 20,
   COMFORT_MAX_C: 33,
   /** Body target °C shift per °C of ambient outside the comfort band. */
-  COLD_TARGET_SLOPE: 0.2,
+  COLD_TARGET_SLOPE: 0.32,
   HEAT_TARGET_SLOPE: 0.15,
 
   /** Warmth bonuses (added to effective ambient °C). */
@@ -114,8 +126,10 @@ export const TEMPERATURE = {
   CAMPFIRE_RADIUS_M: 5.5,
   TORCH_WARMTH_C: 5,
   SHELTER_WARMTH_C: 6,
-  /** Wet clothes chill you by up to this many °C at 100 wetness. */
-  WET_CHILL_C: 8,
+  /** Wet clothes chill effective ambient by up to this many °C at 100 wetness. */
+  WET_CHILL_C: 9,
+  /** Direct extra body target drop (°C) when 100% soaked in cold/windy air. */
+  WET_MAX_PENALTY_C: 1.8,
 
   /** Wetness gained per real second while swimming / in rain (scaled by rain intensity). */
   WETNESS_SWIM_PER_SEC: 40,
@@ -139,8 +153,8 @@ export const SICKNESS = {
 /** Water source behaviour (drinking directly with [E]). */
 export const WATER = {
   FRESH_DRINK_THIRST: 22,
-  /** Chance that drinking straight from an unboiled stream/pond makes you sick. */
-  FRESH_SICK_CHANCE: 0.12,
+  /** Drinking from the freshwater pond/spring does NOT make the player sick (0% chance). */
+  FRESH_SICK_CHANCE: 0,
   SEA_DRINK_THIRST: -10,
   SEA_DRINK_DAMAGE: 4,
 };
@@ -358,31 +372,136 @@ export const GRAPHICS_TUNING = {
   CLOUD_COVERAGE_STORM: 0.86,
   /** Cascaded Shadow Maps config (High / Ultra). */
   CSM_CASCADES: 3,
-  CSM_MAX_FAR: 175,
+  CSM_MAX_FAR: 160,
   /** Reflection render-target resolution (width/height) for ocean planar mirror. */
-  WATER_REFLECTION_SIZE: 512,
+  WATER_REFLECTION_SIZE: 384,
   /** In-game hour delta threshold before refreshing procedural sky PMREM IBL probe. */
-  IBL_REFRESH_HOURS: 0.28,
-  /** Bloom post-processing (high HDR threshold so only true emissives/glints bloom). */
-  BLOOM_STRENGTH: 0.14,
-  BLOOM_RADIUS: 0.30,
-  BLOOM_THRESHOLD: 1.18,
+  IBL_REFRESH_HOURS: 0.35,
+  /** Softened ACES Filmic exposure & grading (Phase 4.2: softer contrast, lifted shadows, warm sun, cool shadows). */
+  TONE_EXPOSURE_DAY: 1.0,
+  TONE_EXPOSURE_NIGHT: 0.72,
+  GRADE_CONTRAST: 0.06,
+  GRADE_SATURATION: 1.03,
+  SHADOW_LIFT_FLOOR: 0.025,
+  AMBIENT_HEMI_INTENSITY_DAY: 0.68,
+  AMBIENT_HEMI_INTENSITY_NIGHT: 0.32,
+  /** Bloom post-processing (high HDR threshold so only true fire/sun glints bloom, never sand). */
+  BLOOM_STRENGTH: 0.11,
+  BLOOM_RADIUS: 0.28,
+  BLOOM_THRESHOLD: 1.24,
   /** Screen-space Ambient Occlusion pass parameters. */
-  SSAO_KERNEL_RADIUS: 1.05,
-  SSAO_MIN_DISTANCE: 0.00028,
-  SSAO_MAX_DISTANCE: 0.0075,
-  /** Subtle edge lens aberration, grain & vignette. */
-  CHROMATIC_ABERRATION_OFFSET: 0.0014,
-  FILM_GRAIN_INTENSITY: 0.022,
-  VIGNETTE_DARKNESS: 0.24,
+  SSAO_KERNEL_RADIUS: 0.95,
+  SSAO_MIN_DISTANCE: 0.00032,
+  SSAO_MAX_DISTANCE: 0.0068,
+  /** Subtle edge lens aberration, grain & vignette (only strong below 25% health). */
+  CHROMATIC_ABERRATION_OFFSET: 0.0008,
+  FILM_GRAIN_INTENSITY: 0.016,
+  VIGNETTE_DARKNESS: 0.15,
+  LOW_HEALTH_VIGNETTE_THRESHOLD: 25,
   /** Optional Depth of Field focus distance & aperture (Ultra). */
   DOF_FOCUS_DISTANCE: 22.0,
   DOF_APERTURE: 0.000045,
-  DOF_MAX_BLUR: 0.0045,
+  DOF_MAX_BLUR: 0.0040,
   /** Floating sunlit dust motes count & hot-day shimmer. */
-  DUST_MOTE_COUNT: 140,
+  DUST_MOTE_COUNT: 120,
   HEAT_SHIMMER_TEMP_C: 29.0,
-  HEAT_SHIMMER_STRENGTH: 0.0018,
+  HEAT_SHIMMER_STRENGTH: 0.0014,
+} as const;
+
+export const MOVEMENT_TUNING = {
+  /** Base walking speed on dry land (m/s). */
+  WALK_SPEED_MPS: 5.5,
+  /** Sprinting speed on dry land (m/s). */
+  SPRINT_SPEED_MPS: 9.2,
+  /** Crouch-walking speed (m/s). */
+  CROUCH_SPEED_MPS: 2.9,
+  /** Speed multiplier when wading in waist-deep water. */
+  WADE_SPEED_MULT: 0.62,
+  /** Speed multiplier when swimming in deep water. */
+  SWIM_SPEED_MULT: 0.56,
+  /** Speed multiplier when exhausted (stamina below EXHAUSTED_THRESHOLD). */
+  EXHAUSTED_SPEED_MULT: 0.60,
+  /** Velocity acceleration damping factor (1/sec) — smooth ramp-up (~0.15 s). */
+  ACCEL_DAMPING: 13.5,
+  /** Velocity deceleration damping factor (1/sec) — smooth coast to stop (~0.18 s). */
+  DECEL_DAMPING: 11.0,
+  /** Air control acceleration damping while airborne. */
+  AIR_CONTROL_DAMPING: 4.2,
+  /** Base world camera vertical FOV (degrees). */
+  BASE_FOV_DEG: 68,
+  /** Extra FOV boost when sprinting (degrees). */
+  SPRINT_FOV_BOOST_DEG: 5,
+  /** Dedicated FOV for the first-person arms & held-tool pass (degrees, prevents distortion). */
+  FP_ARMS_FOV_DEG: 54,
+  /** FOV transition damping speed (1/sec). */
+  FOV_LERP_SPEED: 8.5,
+  /** Mouse-look exponential smoothing factor (1/sec) for weight without lag. */
+  MOUSE_LOOK_SMOOTHING: 28.0,
+  /** Standing eye height above ground (meters). */
+  EYE_HEIGHT_STAND_M: 1.65,
+  /** Crouching eye height above ground (meters). */
+  EYE_HEIGHT_CROUCH_M: 1.08,
+  /** Crouch transition damping speed (1/sec). */
+  CROUCH_LERP_SPEED: 10.0,
+  /** Upward jump velocity (m/s). */
+  JUMP_VELOCITY_MPS: 6.3,
+  /** Gravity acceleration (m/s²). */
+  GRAVITY_MPS2: 17.5,
+} as const;
+
+export const ANIMATION_TUNING = {
+  /** Idle breathing cycle frequency (rad/sec) and vertical amplitude (m). */
+  IDLE_BREATH_FREQ: 1.65,
+  IDLE_BREATH_AMP_Y: 0.0045,
+  IDLE_SWAY_AMP_X: 0.0032,
+  /** Walk head-bob & hand-sway frequency (rad/sec) and amplitudes. */
+  WALK_BOB_FREQ: 8.2,
+  WALK_BOB_AMP_Y: 0.022,
+  WALK_BOB_AMP_X: 0.014,
+  /** Sprint head-bob & hand-sway frequency (rad/sec) and amplitudes. */
+  SPRINT_BOB_FREQ: 12.4,
+  SPRINT_BOB_AMP_Y: 0.042,
+  SPRINT_BOB_AMP_X: 0.028,
+  /** Crouch-walk head-bob frequency and amplitude. */
+  CROUCH_BOB_FREQ: 5.8,
+  CROUCH_BOB_AMP_Y: 0.012,
+  /** Mouse-look procedural hand lag & recovery damping (1/sec). */
+  HAND_SWAY_LAG_SCALE: 0.032,
+  HAND_SWAY_MAX_OFFSET: 0.065,
+  HAND_SWAY_DAMPING: 12.0,
+  /** Jump anticipation camera/hand dip duration (sec) and depth (m). */
+  JUMP_DIP_DURATION_SEC: 0.09,
+  JUMP_DIP_DEPTH_M: 0.06,
+  /** Landing impact camera/hand spring compression max depth (m) and recovery speed (1/sec). */
+  LAND_DIP_MAX_M: 0.16,
+  LAND_DIP_RECOVERY_SPEED: 9.5,
+  /** Chop / harvest swing total duration (sec) and impact hit fraction (0–1). */
+  CHOP_SWING_DURATION_SEC: 0.60,
+  CHOP_IMPACT_PHASE: 0.45,
+  /** Satisfying item pick-up animation duration (sec) and hold-E repeat interval (sec). */
+  PICKUP_DURATION_SEC: 0.50,
+  HOLD_E_REPEAT_INTERVAL_SEC: 0.45,
+  /** Crossfade duration (sec) when blending between skeletal NLA clips. */
+  CLIP_CROSSFADE_SEC: 0.18,
+} as const;
+
+export const PERFORMANCE_TUNING = {
+  /** Default frame rate cap (FPS) so laptop runs cool and quiet. */
+  DEFAULT_FPS_LIMIT: 60,
+  /** Available FPS cap choices (0 = uncapped). */
+  FPS_CAP_OPTIONS: [30, 60, 0] as const,
+  /** Automatic FPS cap when browser window loses focus. */
+  UNFOCUSED_FPS_LIMIT: 30,
+  /** Automatic FPS cap while game is paused or a full-screen menu is open. */
+  PAUSED_MENU_FPS_LIMIT: 10,
+  /** Dynamic resolution threshold: lower internal render scale slightly if FPS stays below this. */
+  DYNAMIC_RES_LOW_FPS_THRESHOLD: 45,
+  DYNAMIC_RES_MIN_SCALE: 0.65,
+  /** Maximum devicePixelRatio per quality preset (critical for Retina Mac thermal control). */
+  PIXEL_RATIO_CAP_LOW: 1.0,
+  PIXEL_RATIO_CAP_MEDIUM: 1.25,
+  PIXEL_RATIO_CAP_HIGH: 1.5,
+  PIXEL_RATIO_CAP_ULTRA: 1.5,
 } as const;
 
 export const TERRAIN_TUNING = {
@@ -441,4 +560,8 @@ export const FORGE_TUNING = {
 export const HUD_TUNING = {
   /** Controls hint bar automatically fades away after this many seconds (toggle anytime with H). */
   HINT_AUTO_HIDE_SEC: 180,
+  /** Smooth fade/slide duration (ms) for menus, modals, tooltips, and prompts. */
+  UI_FADE_DURATION_MS: 200,
+  /** Duration (ms) that "+1 Item" pickup popups remain visible near the hotbar. */
+  PICKUP_TOAST_DURATION_MS: 1800,
 } as const;

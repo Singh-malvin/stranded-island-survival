@@ -1,8 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { audio } from './audio/audio.ts';
-import { GraphicsQuality, loadGraphicsQuality } from './scene/GraphicsConfig.ts';
-import { HoveredTargetInfo, SurvivalScene3D } from './scene/SurvivalScene3D.ts';
+import {
+  ExtendedGraphicsSettings,
+  GraphicsQuality,
+  loadExtendedGraphicsSettings,
+  loadGraphicsQuality,
+} from './scene/GraphicsConfig.ts';
+import {
+  HoveredTargetInfo,
+  ScenePerformanceMetrics,
+  SurvivalScene3D,
+} from './scene/SurvivalScene3D.ts';
 import { HUD_TUNING, INVENTORY, NEEDS, SAVE, TIME, WILDLIFE, WORLD } from './survival/config.ts';
 import {
   createInitialSurvivalState,
@@ -13,6 +22,7 @@ import {
   addItem,
   damageSlotDurability,
   getEquipped,
+  ITEM_DEFS,
   removeItem,
   swapSlots,
 } from './survival/items.ts';
@@ -86,7 +96,7 @@ import { ForgeModal } from './ui/ForgeModal.tsx';
 import { InventoryCraftModal } from './ui/InventoryCraftModal.tsx';
 import { JournalMapModal, JournalTab } from './ui/JournalMapModal.tsx';
 import { StorageModal } from './ui/StorageModal.tsx';
-import { SurvivalHUD } from './ui/SurvivalHUD.tsx';
+import { PickupToastItem, SurvivalHUD } from './ui/SurvivalHUD.tsx';
 import {
   SurvivalDeathModal,
   SurvivalPauseModal,
@@ -125,6 +135,12 @@ export default function App() {
   const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>(() =>
     loadGraphicsQuality(false)
   );
+  const [extSettings, setExtSettings] = useState<ExtendedGraphicsSettings>(() =>
+    loadExtendedGraphicsSettings(false)
+  );
+  const [showPerfOverlay, setShowPerfOverlay] = useState<boolean>(false);
+  const [perfMetrics, setPerfMetrics] = useState<ScenePerformanceMetrics | null>(null);
+  const [pickupToasts, setPickupToasts] = useState<PickupToastItem[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [showControlsHint, setShowControlsHint] = useState(true);
 
@@ -148,6 +164,14 @@ export default function App() {
   const lastGateMsgMsRef = useRef<number>(0);
   const lastBiteToastMsRef = useRef<number>(0);
   const lastActToastRef = useRef<number>(initialLoad.state.act);
+
+  const pushPickupToast = (text: string, icon?: string) => {
+    const id = `toast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    setPickupToasts((prev) => [...prev.slice(-3), { id, text, icon }]);
+    window.setTimeout(() => {
+      setPickupToasts((prev) => prev.filter((t) => t.id !== id));
+    }, HUD_TUNING.PICKUP_POPUP_DURATION_SEC * 1000);
+  };
 
   const showStatus = (msg: string) => {
     setStatusMessage(msg);
@@ -318,6 +342,7 @@ export default function App() {
         return;
       }
       audio.playBuild();
+      sceneRef.current?.triggerActionAnimation('place');
       cancelBuildMode();
       commitAndSave(res.state, 'bed', `${STRUCTURE_CATALOG[activeBuildType].name} Built`);
       showStatus(res.message);
@@ -342,6 +367,7 @@ export default function App() {
         z: pt.z,
       };
       audio.playBuild();
+      sceneRef.current?.triggerActionAnimation('place');
       commitAndSave(
         {
           ...current,
@@ -375,6 +401,7 @@ export default function App() {
         builtDay: current.clock.day,
       };
       audio.playBuild();
+      sceneRef.current?.triggerActionAnimation('place');
       commitAndSave(
         {
           ...current,
@@ -395,6 +422,10 @@ export default function App() {
     if (target.kind === 'clue' && target.clueDef) {
       const res = discoverClue(current, target.clueDef.id);
       audio.playPickup();
+      sceneRef.current?.triggerPickupAnimation(
+        new THREE.Vector3(target.clueDef.x, target.clueDef.y + 0.35, target.clueDef.z),
+        'waist'
+      );
       if (res.newlyFound) {
         commitAndSave(applyActPromotion(res.state), 'autosave', 'Clue Logged');
         showStatus(
@@ -437,6 +468,7 @@ export default function App() {
       const res = repairStationSystem(current, target.repairId);
       if (res.ok) {
         audio.playCraft();
+        sceneRef.current?.triggerActionAnimation('craft');
         commitAndSave(applyActPromotion(res.state), 'autosave', 'Station System Online');
       }
       showStatus(res.message);
@@ -470,6 +502,7 @@ export default function App() {
         const res = tryUnlockGate(current, target.gateDef.id);
         if (res.ok) {
           audio.playBuild();
+          sceneRef.current?.triggerActionAnimation('place');
           commitAndSave(applyActPromotion(res.state), 'autosave', 'Passage Opened');
           showStatus(res.message);
           return;
@@ -488,9 +521,19 @@ export default function App() {
     // 5b. Interact with placed Stage 4 Base Structures
     if (target.kind === 'structure' && target.structureDef) {
       const res = interactWithStructure(current, target.structureDef.id, current.weather);
-      if (res.sound === 'drink') audio.playDrink();
-      else if (res.sound === 'pickup') audio.playPickup();
-      else if (res.sound === 'craft') audio.playCraft();
+      if (res.sound === 'drink') {
+        audio.playDrink();
+        sceneRef.current?.triggerActionAnimation('drink');
+      } else if (res.sound === 'pickup') {
+        audio.playPickup();
+        sceneRef.current?.triggerPickupAnimation(
+          new THREE.Vector3(target.structureDef.x, target.structureDef.y + 0.5, target.structureDef.z),
+          'waist'
+        );
+      } else if (res.sound === 'craft') {
+        audio.playCraft();
+        sceneRef.current?.triggerActionAnimation('craft');
+      }
 
       if (res.openModal === 'craft') {
         openPanel('inventory');
@@ -525,6 +568,7 @@ export default function App() {
       const res = performSpearfishing(current);
       if (res.caught) {
         audio.playPickup();
+        pushPickupToast('+1 Raw Fish', ITEM_DEFS.raw_fish.icon);
         if (target.fishPos) {
           sceneRef.current?.spawnHarvestDebris(
             'pickup',
@@ -541,6 +585,7 @@ export default function App() {
     if (target.kind === 'spring') {
       const res = interactFreshwaterSpring(current);
       audio.playDrink();
+      sceneRef.current?.triggerActionAnimation('drink');
       if (res.gotSick) {
         audio.playHurt();
         triggerDamageFeedback();
@@ -552,7 +597,26 @@ export default function App() {
 
     // 7. Harvest Gathering Node
     if (target.kind === 'node' && target.nodeDef) {
-      sceneRef.current?.triggerToolSwing();
+      const isPickupKind =
+        target.nodeDef.type === 'driftwood' ||
+        target.nodeDef.type === 'flint_pebble' ||
+        target.nodeDef.type === 'berry_bush' ||
+        target.nodeDef.type === 'supply_crate';
+      if (isPickupKind) {
+        const pickupHeight =
+          target.nodeDef.type === 'berry_bush'
+            ? 'bush'
+            : target.nodeDef.type === 'supply_crate'
+              ? 'waist'
+              : 'ground';
+        sceneRef.current?.triggerPickupAnimation(
+          new THREE.Vector3(target.nodeDef.x, target.nodeDef.y + 0.28, target.nodeDef.z),
+          pickupHeight
+        );
+      } else {
+        sceneRef.current?.triggerToolSwing();
+      }
+
       const res = hitGatherNode(current, target.nodeDef);
       if (res.sound === 'chop') audio.playChop();
       else if (res.sound === 'mine') audio.playMine();
@@ -563,6 +627,13 @@ export default function App() {
           res.sound === 'blocked' ? 'pickup' : res.sound,
           new THREE.Vector3(target.nodeDef.x, target.nodeDef.y + 0.6, target.nodeDef.z)
         );
+      }
+
+      if (res.granted && res.granted.length > 0) {
+        for (const g of res.granted) {
+          const def = ITEM_DEFS[g.itemId];
+          pushPickupToast(`+${g.count} ${def ? def.name : g.itemId}`, def?.icon);
+        }
       }
 
       if (res.depleted && target.nodeDef.type === 'supply_crate') {
@@ -583,6 +654,7 @@ export default function App() {
     const scene = new SurvivalScene3D(mountRef.current);
     sceneRef.current = scene;
     setGraphicsQuality(scene.getQuality());
+    setExtSettings(scene.getExtendedGraphicsSettings());
     scene.syncState(stateRef.current);
 
     scene.setCallbacks({
@@ -645,8 +717,9 @@ export default function App() {
       const runtime = scene.getPlayerRuntimeSnapshot();
       setHoveredTarget(scene.hoveredTarget ? { ...scene.hoveredTarget } : null);
       setPlayerContext(runtime.context);
-      if (showDebug) {
+      if (showDebug || showPerfOverlay) {
         setFps(runtime.fps);
+        setPerfMetrics(scene.getPerformanceMetrics());
       }
 
       if (runtime.bumpedGate) {
@@ -845,7 +918,7 @@ export default function App() {
     }, 200);
 
     return () => window.clearInterval(interval);
-  }, [screen, isPaused, showDebug]);
+  }, [screen, isPaused, showDebug, showPerfOverlay]);
 
   // Auto-hide controls hint ribbon after the first few minutes of active play (toggle anytime with H)
   useEffect(() => {
@@ -856,11 +929,23 @@ export default function App() {
     return () => window.clearTimeout(tid);
   }, [screen]);
 
-  // Global keyboard shortcuts (Hotbar 1–6, [B] Build, [Tab]/[I]/[C] Craft, [J] Journal, [M] Map, [H] Hints, [F] Consume, [Esc])
+  // Global keyboard shortcuts (Hotbar 1–6, [B] Build, [Tab]/[I]/[C] Craft, [J] Journal, [M] Map, [H] Hints, [F] Consume, [F3] Perf Overlay, [Esc])
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (screen !== 'playing' || !stateRef.current.alive) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      if (e.code === 'F3') {
+        e.preventDefault();
+        setShowPerfOverlay((prev) => {
+          const next = !prev;
+          if (next && sceneRef.current) {
+            setPerfMetrics(sceneRef.current.getPerformanceMetrics());
+          }
+          return next;
+        });
+        return;
+      }
 
       if (isPaused) {
         if (e.code === 'Escape') {
@@ -870,7 +955,7 @@ export default function App() {
         return;
       }
 
-      if (e.code === 'Tab' || e.code === 'KeyI' || e.code === 'KeyC') {
+      if (e.code === 'Tab' || e.code === 'KeyI') {
         e.preventDefault();
         togglePanel('inventory');
         return;
@@ -951,6 +1036,9 @@ export default function App() {
       return;
     }
     audio.playDrink();
+    sceneRef.current?.triggerActionAnimation(
+      consumedItemId?.startsWith('water_') ? 'drink' : 'eat'
+    );
     if (res.gotSick) {
       audio.playHurt();
       triggerDamageFeedback();
@@ -977,6 +1065,7 @@ export default function App() {
       return;
     }
     audio.playCraft();
+    sceneRef.current?.triggerActionAnimation('craft');
     const cur = stateRef.current;
     const nextFlags = {
       ...cur.flags,
@@ -1236,6 +1325,14 @@ export default function App() {
     showStatus(`Graphics Quality set to ${nextQ.toUpperCase()}.`);
   };
 
+  const handleChangeExtendedSettings = (partial: Partial<ExtendedGraphicsSettings>) => {
+    setExtSettings((prev) => {
+      const next = { ...prev, ...partial };
+      sceneRef.current?.setExtendedGraphicsSettings(next);
+      return next;
+    });
+  };
+
   const handleStartNewGame = (difficulty: 'survivor' | 'hardcore') => {
     const fresh = createInitialSurvivalState(difficulty);
     lastActToastRef.current = fresh.act;
@@ -1293,7 +1390,9 @@ export default function App() {
           hasSavedGame={hasSave}
           savedDay={gameState.clock.day}
           graphicsQuality={graphicsQuality}
+          extSettings={extSettings}
           onChangeGraphicsQuality={handleChangeGraphicsQuality}
+          onChangeExtendedSettings={handleChangeExtendedSettings}
           onContinue={() => setScreen('playing')}
           onStartNew={handleStartNewGame}
         />
@@ -1305,10 +1404,13 @@ export default function App() {
           playerContext={playerContext}
           hoveredTarget={hoveredTarget}
           statusMessage={statusMessage}
+          pickupToasts={pickupToasts}
           saveBadgeText={saveBadgeText}
           activeBuildType={activeBuildType}
           nearbyStations={nearbyStations}
           fps={fps}
+          perfMetrics={perfMetrics}
+          showPerfOverlay={showPerfOverlay}
           showDebug={showDebug}
           damageFlash={damageFlash}
           isMuted={isMuted}
@@ -1453,7 +1555,9 @@ export default function App() {
         isOpen={isPaused}
         state={gameState}
         graphicsQuality={graphicsQuality}
+        extSettings={extSettings}
         onChangeGraphicsQuality={handleChangeGraphicsQuality}
+        onChangeExtendedSettings={handleChangeExtendedSettings}
         onResume={() => closeAllMenusAndLock({ relockPointer: true })}
         onRestart={() => handleStartNewGame(gameState.difficulty)}
       />

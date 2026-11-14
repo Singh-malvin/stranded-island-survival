@@ -74,7 +74,7 @@ export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
     id: 'high',
     label: 'High (Cinematic)',
     description: 'Cascaded sun shadows (CSM), PBR textures, SSAO, SMAA, dense 3D grass, IBL sky & planar water reflections.',
-    pixelRatioCap: 1.6,
+    pixelRatioCap: 1.5,
     shadows: true,
     shadowMapSize: 2048,
     csm: true,
@@ -95,8 +95,8 @@ export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
   ultra: {
     id: 'ultra',
     label: 'Ultra (Max Fidelity)',
-    description: 'Full 2048px CSM, maximum 3D grass & scatter density, SSAO, SMAA, DoF, planar reflections & volumetric haze.',
-    pixelRatioCap: 2.0,
+    description: 'Full 2048px CSM, maximum 3D grass & scatter density, SSAO, SMAA, DoF, planar reflections & volumetric haze (capped at 1.5x DPR for cool Mac thermals).',
+    pixelRatioCap: 1.5,
     shadows: true,
     shadowMapSize: 2048,
     csm: true,
@@ -115,6 +115,60 @@ export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
     heatShimmer: true,
   },
 };
+
+export interface ExtendedGraphicsSettings {
+  autoQuality: boolean;
+  fpsLimit: 30 | 60 | 0; // 0 = uncapped
+  batterySaver: boolean;
+  renderScale: number; // 0.65 - 1.0
+  viewDistance: 'near' | 'medium' | 'far';
+}
+
+const EXTENDED_STORAGE_KEY = 'stranded_graphics_ext_v1';
+
+export function loadExtendedGraphicsSettings(): ExtendedGraphicsSettings {
+  const defaults: ExtendedGraphicsSettings = {
+    autoQuality: false,
+    fpsLimit: 60,
+    batterySaver: false,
+    renderScale: 1.0,
+    viewDistance: 'far',
+  };
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem(EXTENDED_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          autoQuality: Boolean(parsed.autoQuality),
+          fpsLimit: parsed.fpsLimit === 30 || parsed.fpsLimit === 0 ? parsed.fpsLimit : 60,
+          batterySaver: Boolean(parsed.batterySaver),
+          renderScale:
+            typeof parsed.renderScale === 'number'
+              ? Math.max(0.65, Math.min(1.0, parsed.renderScale))
+              : 1.0,
+          viewDistance:
+            parsed.viewDistance === 'near' || parsed.viewDistance === 'medium'
+              ? parsed.viewDistance
+              : 'far',
+        };
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return defaults;
+}
+
+export function saveExtendedGraphicsSettings(settings: ExtendedGraphicsSettings): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(EXTENDED_STORAGE_KEY, JSON.stringify(settings));
+    }
+  } catch {
+    // ignore
+  }
+}
 
 const STORAGE_KEY = 'stranded_graphics_quality_v1';
 

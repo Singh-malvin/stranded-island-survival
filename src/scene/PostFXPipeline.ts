@@ -21,6 +21,9 @@ const SurvivalGradeShader = {
     uCaOffset: { value: GRAPHICS_TUNING.CHROMATIC_ABERRATION_OFFSET },
     uGrainIntensity: { value: GRAPHICS_TUNING.FILM_GRAIN_INTENSITY },
     uVignette: { value: GRAPHICS_TUNING.VIGNETTE_DARKNESS },
+    uContrast: { value: GRAPHICS_TUNING.GRADE_CONTRAST },
+    uSaturation: { value: GRAPHICS_TUNING.GRADE_SATURATION },
+    uShadowLift: { value: GRAPHICS_TUNING.SHADOW_LIFT_FLOOR },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -40,6 +43,9 @@ const SurvivalGradeShader = {
     uniform float uCaOffset;
     uniform float uGrainIntensity;
     uniform float uVignette;
+    uniform float uContrast;
+    uniform float uSaturation;
+    uniform float uShadowLift;
     varying vec2 vUv;
 
     float randGrain(vec2 co) {
@@ -60,7 +66,7 @@ const SurvivalGradeShader = {
         sampleUv.y += cos(vUv.x * 42.0 + uTime * 6.5) * uHeatShimmer * 0.55 * horizonMask;
       }
 
-      // Edge chromatic aberration (radial dispersion strongest near screen corners)
+      // Edge chromatic aberration (very subtle)
       float caWeight = pow(clamp(dist * 1.45, 0.0, 1.0), 1.8) * uCaOffset;
       vec2 uvR = clamp(sampleUv + radialDir * caWeight, vec2(0.0), vec2(1.0));
       vec2 uvB = clamp(sampleUv - radialDir * caWeight, vec2(0.0), vec2(1.0));
@@ -70,26 +76,46 @@ const SurvivalGradeShader = {
       float bCh = texture2D(tDiffuse, uvB).b;
       vec3 col = vec3(rCh, base.g, bCh);
 
-      // Filmic subtle S-curve contrast preserving bright sand/cloud highlight texture
+      // Hypothermia stage 4 & 5 screen-edge blur when uCold > 0.42 (< 34.5 C)
+      float edgeBlurMask = smoothstep(0.26, 0.72, dist) * clamp((uCold - 0.40) * 1.65, 0.0, 1.0);
+      if (edgeBlurMask > 0.01) {
+        vec2 bStep = radialDir * 0.0045 * edgeBlurMask;
+        vec3 b1 = texture2D(tDiffuse, clamp(sampleUv + bStep, vec2(0.0), vec2(1.0))).rgb;
+        vec3 b2 = texture2D(tDiffuse, clamp(sampleUv - bStep, vec2(0.0), vec2(1.0))).rgb;
+        col = mix(col, 0.5 * (b1 + b2), edgeBlurMask * 0.75);
+      }
+
+      // Lifted shadows so caves/jungle undersides never crush to pitch black
+      col = col + vec3(uShadowLift) * (1.0 - col);
+
+      // Natural warm sunlight highlights & cool shadow fill
       float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));
-      col = mix(vec3(luma), col, mix(1.08, 0.86, uStorm * 0.8 + uNight * 0.35));
-      col = mix(col, col * col * (3.0 - 2.0 * col), 0.16);
+      vec3 shadowTint = vec3(0.92, 0.96, 1.04);
+      vec3 highlightTint = vec3(1.03, 1.00, 0.95);
+      col *= mix(shadowTint, highlightTint, smoothstep(0.15, 0.85, luma));
 
-      // Night cool shadow tint
-      col = mix(col, col * vec3(0.76, 0.86, 1.08), uNight * 0.42);
+      // Gentle saturation & soft S-curve contrast (no harsh blown-out sand or crushed blacks)
+      col = mix(vec3(luma), col, mix(uSaturation, 0.88, uStorm * 0.7 + uNight * 0.28));
+      col = mix(col, col * col * (3.0 - 2.0 * col), uContrast);
 
-      // Hypothermia cold rim vignette
-      float vig = smoothstep(0.30, 0.86, dist);
-      vec3 frost = vec3(0.42, 0.72, 0.98);
-      col = mix(col, frost, vig * uCold * 0.55);
+      // Night cool moonlight tint
+      col = mix(col, col * vec3(0.82, 0.90, 1.06), uNight * 0.34);
 
-      // Low HP / Injury red perimeter pulse
-      float pulse = 0.75 + 0.25 * sin(uTime * 7.5);
-      vec3 blood = vec3(0.68, 0.06, 0.06);
-      col = mix(col, blood, vig * uHurt * 0.62 * pulse);
+      // Hypothermia cold rim frost (crystalline pattern near edges at Severe stage)
+      float vig = smoothstep(0.28, 0.84, dist);
+      float frostCrystal = 0.85 + 0.15 * sin(vUv.x * 90.0 + cos(vUv.y * 90.0));
+      vec3 frost = vec3(0.54, 0.80, 0.98) * frostCrystal;
+      col = mix(col, frost, vig * uCold * 0.62);
 
-      // Subtle cinematic vignette & photographic film grain
-      col *= 1.0 - smoothstep(0.36, 0.95, dist) * uVignette;
+      // Low HP (<25%) subtle perimeter pulse
+      if (uHurt > 0.001) {
+        float pulse = 0.78 + 0.22 * sin(uTime * 6.5);
+        vec3 blood = vec3(0.62, 0.07, 0.07);
+        col = mix(col, blood, vig * uHurt * 0.52 * pulse);
+      }
+
+      // Subtle cinematic vignette & light film grain
+      col *= 1.0 - smoothstep(0.42, 0.96, dist) * uVignette;
       float grain = (randGrain(vUv * vec2(1280.0, 720.0)) - 0.5) * uGrainIntensity;
       col += grain;
 

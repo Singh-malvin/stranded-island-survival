@@ -263,11 +263,11 @@ export function sampleIslandHeight(
       h = h * (1 - w) + shelf * w;
     }
 
-    // 3. Freshwater Spring mossy hollow (-34, 82)
+    // 3. Freshwater Spring mossy hollow (-34, 82) — smooth, gently sloped walkable bank
     const springDist = Math.hypot(x - WORLD.SPRING_POS.x, z - WORLD.SPRING_POS.z);
     if (springDist < 12) {
       const w = 1 - smoothstep(2.0, 12, springDist);
-      const basin = springDist < 3.0 ? 2.55 : 3.25;
+      const basin = 2.48 + 0.77 * smoothstep(1.2, 6.8, springDist);
       h = h * (1 - w) + basin * w;
     }
 
@@ -480,8 +480,8 @@ function buildStaticWorldColliders(): WorldCollider[] {
       id: 'wreck_fuselage',
       x: WORLD.WRECK_POS.x,
       z: WORLD.WRECK_POS.z,
-      halfW: 3.45,
-      halfD: 1.62,
+      halfW: 3.55,
+      halfD: 1.68,
       yaw: 0.35,
     },
     {
@@ -490,7 +490,7 @@ function buildStaticWorldColliders(): WorldCollider[] {
       x: WORLD.WRECK_POS.x - 1.5,
       z: WORLD.WRECK_POS.z + 2.6,
       halfW: 3.8,
-      halfD: 1.15,
+      halfD: 1.18,
       yaw: -0.4,
     },
     {
@@ -498,7 +498,41 @@ function buildStaticWorldColliders(): WorldCollider[] {
       id: 'wreck_engine',
       x: WORLD.WRECK_POS.x - 2.2,
       z: WORLD.WRECK_POS.z + 3.5,
-      radius: 0.95,
+      radius: 1.05,
+    },
+    {
+      kind: 'obb',
+      id: 'wreck_tail_fin',
+      x: WORLD.WRECK_POS.x + 2.8,
+      z: WORLD.WRECK_POS.z - 1.9,
+      halfW: 1.35,
+      halfD: 0.58,
+      yaw: 0.8,
+    },
+    {
+      kind: 'obb',
+      id: 'wreck_debris_panel',
+      x: WORLD.WRECK_POS.x - 2.9,
+      z: WORLD.WRECK_POS.z - 1.2,
+      halfW: 1.05,
+      halfD: 0.75,
+      yaw: 0.5,
+    },
+    {
+      kind: 'circle',
+      id: 'wreck_seat',
+      x: WORLD.WRECK_POS.x - 1.8,
+      z: WORLD.WRECK_POS.z + 1.4,
+      radius: 0.55,
+    },
+    {
+      kind: 'obb',
+      id: 'wreck_suitcase',
+      x: WORLD.WRECK_POS.x + 1.4,
+      z: WORLD.WRECK_POS.z + 2.2,
+      halfW: 0.48,
+      halfD: 0.35,
+      yaw: 0.9,
     },
     // Jungle Tail Section (WORLD.JUNGLE_TAIL_POS = { x: 48, z: -12 })
     {
@@ -787,7 +821,7 @@ export function resolveWorldMovement(
   const totalDx = toX - fromX;
   const totalDz = toZ - fromZ;
   const totalDist = Math.hypot(totalDx, totalDz);
-  const steps = totalDist <= 0.0001 ? 1 : Math.min(24, Math.max(1, Math.ceil(totalDist / 0.35)));
+  const steps = totalDist <= 0.0001 ? 1 : Math.min(36, Math.max(1, Math.ceil(totalDist / 0.14)));
 
   let cx = fromX;
   let cz = fromZ;
@@ -883,17 +917,17 @@ export function resolveWorldMovement(
       const nextH = sampleIslandHeight(next.x, next.z);
       const uphillRise = nextH - curH;
 
-      // Also probe 0.42m ahead along heading so tiny delta frames still detect steep walls cleanly
+      // Also probe capsule perimeter (PLAYER_RADIUS = 0.44m) ahead along heading so steep walls stop the capsule shell cleanly
       const dirX = (next.x - cx) / stepD;
       const dirZ = (next.z - cz) / stepD;
-      const probeDist = 0.42;
-      const aheadH = sampleIslandHeight(cx + dirX * probeDist, cz + dirZ * probeDist);
+      const probeDist = COLLISION_TUNING.PLAYER_RADIUS;
+      const aheadH = sampleIslandHeight(next.x + dirX * probeDist, next.z + dirZ * probeDist);
       const stepSlope = uphillRise / stepD;
-      const aheadSlope = (aheadH - curH) / probeDist;
+      const aheadSlope = (aheadH - curH) / (stepD + probeDist);
 
       if (
-        (uphillRise > 0.01 && stepSlope > COLLISION_TUNING.MAX_SLOPE_RISE_PER_M) ||
-        (aheadH - curH > 0.25 && aheadSlope > COLLISION_TUNING.MAX_SLOPE_RISE_PER_M)
+        (uphillRise > 0.005 && stepSlope > COLLISION_TUNING.MAX_SLOPE_RISE_PER_M) ||
+        (aheadH - curH > 0.18 && aheadSlope > COLLISION_TUNING.MAX_SLOPE_RISE_PER_M)
       ) {
         blockedByCliff = true;
 

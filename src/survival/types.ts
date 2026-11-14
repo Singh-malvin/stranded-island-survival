@@ -119,6 +119,10 @@ export interface Needs {
   wetness: number;
   /** Seconds of food poisoning remaining (0 = healthy). */
   sickness: number;
+  /** Human-readable reason for active sickness (e.g. 'Raw Meat', 'Dirty Water', 'Sea Water', 'Spoiled Food'). */
+  sicknessCause?: string;
+  /** Current body temperature direction ('warming' | 'cooling' | 'stable'). */
+  tempTrend?: 'warming' | 'cooling' | 'stable';
 }
 
 export type DayPhase = 'dawn' | 'day' | 'dusk' | 'night';
