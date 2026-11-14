@@ -516,11 +516,27 @@ export function buildAtmosphericSkyDome(scene: THREE.Scene): SkyDomeHandle {
         float sunDiscGlow = pow(sunCos, 680.0) * 1.45 + pow(sunCos, 28.0) * 0.16;
         vec3 sunOverlay = uSunColor * sunDiscGlow * (1.0 - uNight) * (1.0 - uStorm * 0.85) * (1.0 - clouds * 0.72);
 
-        vec3 outRgb = mix(cloudCol, nightBase + starCol, nightAlpha * (1.0 - clouds * 0.72));
+        // Luminous waxing Moon opposite sun & occasional night shooting star streak
+        vec3 moonDir = normalize(vec3(-uSunDir.x * 0.85, max(0.30, -uSunDir.y + 0.58), -uSunDir.z * 0.85));
+        float moonCos = max(dot(d, moonDir), 0.0);
+        float moonDisc = smoothstep(0.99835, 0.9991, moonCos) * uNight * (1.0 - uStorm * 0.88) * (1.0 - clouds * 0.82);
+        float moonHalo = pow(moonCos, 46.0) * 0.18 * uNight * (1.0 - uStorm * 0.85) * (1.0 - clouds * 0.65);
+        vec3 moonCol = vec3(0.84, 0.90, 1.0) * (moonDisc * 1.12 + moonHalo);
+
+        // Periodic brief shooting star high in clear night sky
+        float meteorCycle = fract(uTime * 0.045);
+        float meteorActive = smoothstep(0.0, 0.012, meteorCycle) * (1.0 - smoothstep(0.045, 0.075, meteorCycle));
+        vec2 mOrigin = vec2(0.18, 0.58);
+        vec2 mHead = mOrigin + vec2(0.32, -0.14) * clamp(meteorCycle * 15.0, 0.0, 1.2);
+        vec2 skyProj = vec2(d.x, d.y);
+        float mSegDist = length(skyProj - mix(mOrigin, mHead, clamp(dot(skyProj - mOrigin, mHead - mOrigin) / max(0.0001, dot(mHead - mOrigin, mHead - mOrigin)), 0.0, 1.0)));
+        float meteorStreak = smoothstep(0.0038, 0.0, mSegDist) * meteorActive * uNight * (1.0 - uStorm * 0.95) * (1.0 - clouds) * step(0.15, d.z);
+
+        vec3 outRgb = mix(cloudCol, nightBase + starCol + moonCol + vec3(0.92, 0.96, 1.0) * meteorStreak * 1.4, nightAlpha * (1.0 - clouds * 0.72));
         outRgb = mix(outRgb, uHorizonColor * 0.88, horizonHaze * (1.0 - uNight * 0.6));
         outRgb += sunOverlay;
         float sunAlpha = clamp(sunDiscGlow * 0.85 * (1.0 - uNight) * (1.0 - uStorm * 0.85), 0.0, 0.92);
-        float outAlpha = clamp(max(max(clouds * (0.80 + uStorm * 0.15), max(nightAlpha, horizonHaze)), sunAlpha), 0.0, 1.0);
+        float outAlpha = clamp(max(max(clouds * (0.80 + uStorm * 0.15), max(nightAlpha, horizonHaze)), max(sunAlpha, moonDisc * 0.9)), 0.0, 1.0);
 
         gl_FragColor = vec4(outRgb, outAlpha);
       }

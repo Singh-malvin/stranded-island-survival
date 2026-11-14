@@ -24,6 +24,11 @@ const SurvivalGradeShader = {
     uContrast: { value: GRAPHICS_TUNING.GRADE_CONTRAST },
     uSaturation: { value: GRAPHICS_TUNING.GRADE_SATURATION },
     uShadowLift: { value: GRAPHICS_TUNING.SHADOW_LIFT_FLOOR },
+    uRainDroplets: { value: 0 },
+    uUnderwater: { value: 0 },
+    uMotionBlur: { value: 0 },
+    uMotionVel: { value: new THREE.Vector2(0, 0) },
+    uPhotoFilter: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -46,10 +51,21 @@ const SurvivalGradeShader = {
     uniform float uContrast;
     uniform float uSaturation;
     uniform float uShadowLift;
+    uniform float uRainDroplets;
+    uniform float uUnderwater;
+    uniform float uMotionBlur;
+    uniform vec2 uMotionVel;
+    uniform float uPhotoFilter;
     varying vec2 vUv;
 
     float randGrain(vec2 co) {
       return fract(sin(dot(co, vec2(12.9898, 78.233)) + uTime * 3.17) * 43758.5453);
+    }
+
+    float hash21(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
     }
 
     void main() {
@@ -66,8 +82,37 @@ const SurvivalGradeShader = {
         sampleUv.y += cos(vUv.x * 42.0 + uTime * 6.5) * uHeatShimmer * 0.55 * horizonMask;
       }
 
+      // Underwater optical ripple distortion
+      if (uUnderwater > 0.005) {
+        float uw = uUnderwater * 0.0075;
+        sampleUv.x += sin(vUv.y * 22.0 + uTime * 4.2) * uw;
+        sampleUv.y += cos(vUv.x * 19.0 + uTime * 3.5) * uw * 0.7;
+      }
+
+      // Rain droplets clinging subtly near camera lens edges during storm / post-swim
+      float dropletRim = 0.0;
+      if (uRainDroplets > 0.005) {
+        float edgeMask = smoothstep(0.18, 0.72, dist);
+        vec2 gridUv = sampleUv * vec2(15.0, 9.0);
+        gridUv.y += uTime * 0.36;
+        vec2 id = floor(gridUv);
+        vec2 gv = fract(gridUv) - 0.5;
+        float rnd = hash21(id);
+        vec2 dropPos = vec2((rnd - 0.5) * 0.48, (fract(rnd * 13.7) - 0.5) * 0.48);
+        vec2 dv = gv - dropPos;
+        float dDrop = length(dv);
+        float activeDrop = step(0.56, rnd);
+        float radius = mix(0.08, 0.15, fract(rnd * 29.1)) * activeDrop;
+        float mask = smoothstep(radius, radius * 0.35, dDrop) * uRainDroplets * edgeMask;
+        vec2 refractOff = dv * mask * 0.026;
+        sampleUv += refractOff;
+        float rimRing = smoothstep(radius * 0.92, radius * 0.70, dDrop) * (1.0 - smoothstep(radius * 0.65, radius * 0.35, dDrop));
+        float glint = clamp(dot(normalize(dv + vec2(0.0001)), vec2(-0.55, 0.72)), 0.0, 1.0);
+        dropletRim = rimRing * glint * uRainDroplets * edgeMask * 0.12;
+      }
+
       // Edge chromatic aberration (very subtle)
-      float caWeight = pow(clamp(dist * 1.45, 0.0, 1.0), 1.8) * uCaOffset;
+      float caWeight = pow(clamp(dist * 1.45, 0.0, 1.0), 1.8) * (uCaOffset + uUnderwater * 0.0022);
       vec2 uvR = clamp(sampleUv + radialDir * caWeight, vec2(0.0), vec2(1.0));
       vec2 uvB = clamp(sampleUv - radialDir * caWeight, vec2(0.0), vec2(1.0));
 
@@ -75,6 +120,15 @@ const SurvivalGradeShader = {
       vec4 base = texture2D(tDiffuse, clamp(sampleUv, vec2(0.0), vec2(1.0)));
       float bCh = texture2D(tDiffuse, uvB).b;
       vec3 col = vec3(rCh, base.g, bCh);
+
+      // Subtle directional camera turn motion blur
+      float velMag = length(uMotionVel);
+      if (uMotionBlur > 0.01 && velMag > 0.0004) {
+        vec2 mbStep = clamp(uMotionVel, vec2(-0.02), vec2(0.02)) * uMotionBlur;
+        vec3 m1 = texture2D(tDiffuse, clamp(sampleUv - mbStep, vec2(0.0), vec2(1.0))).rgb;
+        vec3 m2 = texture2D(tDiffuse, clamp(sampleUv + mbStep, vec2(0.0), vec2(1.0))).rgb;
+        col = mix(col, (col + m1 + m2) / 3.0, clamp(velMag * 28.0, 0.0, 0.45) * uMotionBlur);
+      }
 
       // Hypothermia stage 4 & 5 screen-edge blur when uCold > 0.42 (< 34.5 C)
       float edgeBlurMask = smoothstep(0.26, 0.72, dist) * clamp((uCold - 0.40) * 1.65, 0.0, 1.0);
@@ -101,6 +155,16 @@ const SurvivalGradeShader = {
       // Night cool moonlight tint
       col = mix(col, col * vec3(0.82, 0.90, 1.06), uNight * 0.34);
 
+      // Rain droplet specular rim highlight
+      col += vec3(0.76, 0.85, 0.94) * dropletRim;
+
+      // Underwater deep teal-blue absorption & caustics shimmer
+      if (uUnderwater > 0.005) {
+        float caust = 0.5 + 0.5 * sin(vUv.x * 28.0 + uTime * 3.1) * cos(vUv.y * 24.0 - uTime * 2.4);
+        vec3 uwTint = vec3(0.09, 0.42, 0.54) + vec3(0.05, 0.14, 0.16) * caust * (1.0 - dist);
+        col = mix(col, col * vec3(0.36, 0.78, 0.90) + uwTint * 0.32, uUnderwater * 0.72);
+      }
+
       // Hypothermia cold rim frost (crystalline pattern near edges at Severe stage)
       float vig = smoothstep(0.28, 0.84, dist);
       float frostCrystal = 0.85 + 0.15 * sin(vUv.x * 90.0 + cos(vUv.y * 90.0));
@@ -112,6 +176,27 @@ const SurvivalGradeShader = {
         float pulse = 0.78 + 0.22 * sin(uTime * 6.5);
         vec3 blood = vec3(0.62, 0.07, 0.07);
         col = mix(col, blood, vig * uHurt * 0.52 * pulse);
+      }
+
+      // Photo Mode grading filter presets (1=Cinematic, 2=Noir, 3=Golden, 4=Vibrant)
+      if (uPhotoFilter > 0.5 && uPhotoFilter < 1.5) {
+        // Cinematic teal shadows + warm highlights
+        float lC = dot(col, vec3(0.2126, 0.7152, 0.0722));
+        col *= mix(vec3(0.84, 0.96, 1.08), vec3(1.10, 0.99, 0.88), smoothstep(0.2, 0.8, lC));
+        col = mix(col, col * col * (3.0 - 2.0 * col), 0.26);
+      } else if (uPhotoFilter >= 1.5 && uPhotoFilter < 2.5) {
+        // Noir dramatic monochrome
+        float gray = dot(col, vec3(0.299, 0.587, 0.114));
+        gray = smoothstep(0.04, 0.96, gray);
+        col = vec3(gray) * vec3(0.98, 0.99, 1.02);
+      } else if (uPhotoFilter >= 2.5 && uPhotoFilter < 3.5) {
+        // Golden sunset glow
+        col *= vec3(1.12, 1.01, 0.84);
+        col += vec3(0.03, 0.015, 0.0) * (1.0 - dist);
+      } else if (uPhotoFilter >= 3.5) {
+        // Vibrant tropical punch
+        float lV = dot(col, vec3(0.2126, 0.7152, 0.0722));
+        col = mix(vec3(lV), col, 1.32);
       }
 
       // Subtle cinematic vignette & light film grain
@@ -230,6 +315,12 @@ export class PostFXPipeline {
     hurtFactor: number;
     stormFactor: number;
     heatShimmerFactor?: number;
+    rainDroplets?: number;
+    underwaterFactor?: number;
+    motionBlurStrength?: number;
+    motionVelX?: number;
+    motionVelY?: number;
+    photoFilter?: number;
     tSec: number;
   }) {
     const u = this.gradePass.uniforms;
@@ -238,6 +329,13 @@ export class PostFXPipeline {
     u.uHurt.value = opts.hurtFactor;
     u.uStorm.value = opts.stormFactor;
     u.uHeatShimmer.value = opts.heatShimmerFactor ?? 0;
+    u.uRainDroplets.value = opts.rainDroplets ?? 0;
+    u.uUnderwater.value = opts.underwaterFactor ?? 0;
+    u.uMotionBlur.value = opts.motionBlurStrength ?? 0;
+    if (u.uMotionVel.value) {
+      u.uMotionVel.value.set(opts.motionVelX ?? 0, opts.motionVelY ?? 0);
+    }
+    u.uPhotoFilter.value = opts.photoFilter ?? 0;
     u.uTime.value = opts.tSec;
   }
 

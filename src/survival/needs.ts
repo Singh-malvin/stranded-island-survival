@@ -8,6 +8,7 @@ import {
   DIFFICULTY,
   NEEDS,
   SICKNESS,
+  STANCE_TUNING,
   TEMPERATURE,
   TIME,
   WATER,
@@ -244,13 +245,14 @@ export function computeTargetBodyTempC(
   let effectiveAmbient = ambientC;
 
   if (ctx.nearFire) {
-    effectiveAmbient += TEMPERATURE.CAMPFIRE_WARMTH_C;
+    const sitFireMult = ctx.stance === 'sit' ? STANCE_TUNING.SIT_NEAR_FIRE_WARMTH_MULT : 1.0;
+    effectiveAmbient += TEMPERATURE.CAMPFIRE_WARMTH_C * sitFireMult;
   }
   if (ctx.holdingLitTorch) {
     effectiveAmbient += TEMPERATURE.TORCH_WARMTH_C;
   }
   if (ctx.sheltered) {
-    effectiveAmbient += TEMPERATURE.SHELTER_WARMTH_C;
+    effectiveAmbient += TEMPERATURE.SHELTER_WARMTH_C * (ctx.stance === 'sit' || ctx.stance === 'sleep' ? 1.25 : 1.0);
   }
   if (wetness > 0) {
     effectiveAmbient -= (wetness / 100) * TEMPERATURE.WET_CHILL_C;
@@ -326,8 +328,16 @@ export function tickNeeds(
   } else {
     const lowNeeds =
       next.hunger < NEEDS.LOW_NEED_THRESHOLD || next.thirst < NEEDS.LOW_NEED_THRESHOLD;
+    const stanceRegenMult =
+      ctx.stance === 'sit'
+        ? STANCE_TUNING.SIT_STAMINA_REGEN_MULT
+        : ctx.stance === 'prone'
+          ? STANCE_TUNING.PRONE_STAMINA_REGEN_MULT
+          : 1.0;
     const regenMult =
-      (lowNeeds ? NEEDS.STAMINA_REGEN_LOW_NEEDS_MULT : 1.0) * tempStagePre.staminaRegenMult;
+      (lowNeeds ? NEEDS.STAMINA_REGEN_LOW_NEEDS_MULT : 1.0) *
+      tempStagePre.staminaRegenMult *
+      stanceRegenMult;
     next.stamina = Math.min(
       100,
       next.stamina + realDtSec * NEEDS.STAMINA_REGEN_PER_SEC * regenMult
@@ -485,9 +495,9 @@ export function consumeInventorySlot(
   if (
     def.id === 'cooked_meat' ||
     def.id === 'cooked_fish' ||
-    def.id === 'cooked_crab' ||
+    def.id === 'dried_fish' ||
     def.id === 'water_bottle_clean' ||
-    def.id === 'jerky'
+    def.id === 'dried_meat'
   ) {
     if (needs.temperature < TEMPERATURE.NORMAL_BODY_C) {
       needs.temperature =

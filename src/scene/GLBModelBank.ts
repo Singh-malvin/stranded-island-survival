@@ -6,6 +6,7 @@ import { WorldCollider } from '../survival/world.ts';
 export interface LoadedGLBSet {
   fpArms: THREE.Group;
   fpArmsAnimations: THREE.AnimationClip[];
+  playerBody: THREE.Group;
   palmTrees: [THREE.Group, THREE.Group, THREE.Group];
   palmTreeLods: [THREE.Group, THREE.Group, THREE.Group];
   rocks: {
@@ -28,12 +29,19 @@ export interface LoadedGLBSet {
   tools: {
     hatchetStone: THREE.Group;
     pickaxeFlint: THREE.Group;
+    hammerCraft: THREE.Group;
     flintSharp: THREE.Group;
     flintSharpLod: THREE.Group;
     branchFallen: THREE.Group;
     branchFallenLod: THREE.Group;
     ropeCoil: THREE.Group;
     ropeCoilLod: THREE.Group;
+    torchHand: THREE.Group;
+    lantern: THREE.Group;
+    machete: THREE.Group;
+    spear: THREE.Group;
+    waterContainer: THREE.Group;
+    foodRation: THREE.Group;
   };
   campfire: {
     lit: THREE.Group;
@@ -80,7 +88,11 @@ export interface LoadedGLBSet {
 function markGLBMaterials(root: THREE.Object3D, isFirstPerson: boolean = false): void {
   root.traverse((obj) => {
     const upperName = (obj.name || '').toUpperCase();
-    if (upperName.includes('COLLIDER') || upperName.includes('GRIP_POINT')) {
+    if (
+      upperName.includes('COLLIDER') ||
+      upperName.includes('GRIP_POINT') ||
+      upperName === 'ICOSPHERE'
+    ) {
       obj.visible = false;
       const colMesh = obj as THREE.Mesh;
       if (upperName.includes('COLLIDER') && colMesh.isMesh && colMesh.geometry) {
@@ -164,6 +176,7 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
 
   cachedPromise = Promise.all([
     loadOneWithClips('fp_arms.glb', true),
+    loadOne('player_body.glb', false),
     loadOne('palm_tree_01.glb'),
     loadOne('palm_tree_02.glb'),
     loadOne('palm_tree_03.glb'),
@@ -185,12 +198,19 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
     loadOne('plane_panel_debris.glb'),
     loadOne('hatchet_stone.glb', true),
     loadOne('pickaxe_flint.glb', true),
-    loadOne('flint_sharp.glb'),
+    loadOne('hammer_craft.glb', true),
+    loadOne('flint_sharp.glb', true),
     loadOne('flint_sharp_lod1.glb'),
-    loadOne('branch_fallen.glb'),
+    loadOne('branch_fallen.glb', true),
     loadOne('branch_fallen_lod1.glb'),
-    loadOne('rope_coil.glb'),
+    loadOne('rope_coil.glb', true),
     loadOne('rope_coil_lod1.glb'),
+    loadOne('torch_hand.glb', true),
+    loadOne('lantern.glb', true),
+    loadOne('machete.glb', true),
+    loadOne('spear.glb', true),
+    loadOne('water_container.glb', true),
+    loadOne('food_ration.glb', true),
     loadOne('campfire_lit.glb'),
     loadOne('campfire_burnt_out.glb'),
     loadOne('pond_edge_bank.glb'),
@@ -226,6 +246,7 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
   ]).then(
     ([
       fpArmsRes,
+      playerBody,
       p1,
       p2,
       p3,
@@ -247,12 +268,19 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
       wPanel,
       tHatchet,
       tPickaxe,
+      tHammer,
       tFlint,
       tFlintLod,
       tBranch,
       tBranchLod,
       tRope,
       tRopeLod,
+      tTorchHand,
+      tLantern,
+      tMachete,
+      tSpear,
+      tWaterContainer,
+      tFoodRation,
       cLit,
       cBurnt,
       ePond,
@@ -288,6 +316,7 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
     ]) => ({
       fpArms: fpArmsRes.scene,
       fpArmsAnimations: fpArmsRes.animations,
+      playerBody,
       palmTrees: [p1, p2, p3],
       palmTreeLods: [p1Lod, p2Lod, p3Lod],
       rocks: {
@@ -310,12 +339,19 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
       tools: {
         hatchetStone: tHatchet,
         pickaxeFlint: tPickaxe,
+        hammerCraft: tHammer,
         flintSharp: tFlint,
         flintSharpLod: tFlintLod,
         branchFallen: tBranch,
         branchFallenLod: tBranchLod,
         ropeCoil: tRope,
         ropeCoilLod: tRopeLod,
+        torchHand: tTorchHand,
+        lantern: tLantern,
+        machete: tMachete,
+        spear: tSpear,
+        waterContainer: tWaterContainer,
+        foodRation: tFoodRation,
       },
       campfire: {
         lit: cLit,
@@ -493,6 +529,28 @@ export function buildGLBFirstPersonArm(
   wrapper.add(cloned);
   wrapper.userData.__skinnedClone = cloned;
   return wrapper;
+}
+
+/**
+ * Clones a holdable GLB template while preserving SkinnedMesh + Bone hierarchy (`ik_hand_R` / `ik_hand_L`).
+ */
+export function cloneHoldableGLB(template: THREE.Group): THREE.Group {
+  const cloned = SkeletonUtils.clone(template) as THREE.Group;
+  markGLBMaterials(cloned, true);
+  return cloned;
+}
+
+/**
+ * Clones the complete, single-rig first-person arms & sleeves (`fp_arms.glb`)
+ * for real-time Two-Bone IK in `FirstPersonIKRig`.
+ */
+export function buildUnifiedFirstPersonArmsRig(fpArmsTemplate: THREE.Group): THREE.Group {
+  const cloned = SkeletonUtils.clone(fpArmsTemplate) as THREE.Group;
+  markGLBMaterials(cloned, true);
+  // Start injury bandage hidden until player applies a bandage wound dressing
+  const inj = cloned.getObjectByName('InjuryBandage_L');
+  if (inj) inj.visible = false;
+  return cloned;
 }
 
 export type FPArmClipName =

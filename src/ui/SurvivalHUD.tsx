@@ -21,9 +21,17 @@ import {
   Moon,
   Compass,
   AlertTriangle,
+  Camera,
+  Wind,
 } from 'lucide-react';
 import { HoveredTargetInfo, ScenePerformanceMetrics } from '../scene/SurvivalScene3D.ts';
-import { GRAPHICS_TUNING, INVENTORY, TEMPERATURE } from '../survival/config.ts';
+import {
+  GRAPHICS_TUNING,
+  INVENTORY,
+  PART5_IMMERSION_TUNING,
+  TEMPERATURE,
+  WORLD,
+} from '../survival/config.ts';
 import { getEquipped, getInitialDurability, ITEM_DEFS } from '../survival/items.ts';
 import { FloatingItemTooltip, HoverTooltipData } from './ItemTooltip.tsx';
 import { computeAmbientTempC, formatClock, getBodyTempStage } from '../survival/needs.ts';
@@ -61,6 +69,18 @@ interface SurvivalHUDProps {
   showPerfOverlay?: boolean;
   showDebug?: boolean;
   damageFlash: boolean;
+  sleepFadeAlpha?: number;
+  playerYaw?: number;
+  oxygen?: number;
+  holdInteractProgress?: number;
+  captions?: Array<{ id: string; text: string }>;
+  tutorialHint?: { id: string; text: string } | null;
+  onDismissTutorialHint?: () => void;
+  photoMode?: boolean;
+  photoFilter?: number;
+  onTogglePhotoMode?: () => void;
+  onChangePhotoFilter?: (idx: number) => void;
+  onCapturePhoto?: () => void;
   isMuted: boolean;
   showControlsHint?: boolean;
   onToggleControlsHint?: () => void;
@@ -95,6 +115,18 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
   showPerfOverlay = false,
   showDebug,
   damageFlash,
+  sleepFadeAlpha = 0,
+  playerYaw = 0,
+  oxygen = 100,
+  holdInteractProgress = 0,
+  captions = [],
+  tutorialHint = null,
+  onDismissTutorialHint,
+  photoMode = false,
+  photoFilter = 0,
+  onTogglePhotoMode,
+  onChangePhotoFilter,
+  onCapturePhoto,
   isMuted,
   showControlsHint = true,
   onToggleControlsHint,
@@ -179,7 +211,23 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
         <div className="fixed inset-0 bg-red-700/35 transition-opacity duration-150" />
       )}
 
-      {/* Top Bar: Environment & Clock (Left) + Current Objective & Utility Buttons (Right) */}
+      {/* Cinematic Sleep blackout fade */}
+      {sleepFadeAlpha > 0.01 && (
+        <div
+          className="fixed inset-0 z-30 flex items-center justify-center bg-black transition-opacity duration-150"
+          style={{ opacity: Math.min(1, sleepFadeAlpha) }}
+        >
+          {sleepFadeAlpha > 0.65 && (
+            <div className="text-center tracking-widest text-amber-200/85">
+              <div className="text-xs uppercase opacity-75">Shelter Rest</div>
+              <div className="mt-1 text-sm font-medium">Sleeping until dawn...</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Top Bar: Environment & Clock (Left) + Compass (Center) + Current Objective & Utility Buttons (Right) */}
+      {!photoMode && (
       <div className="flex items-start justify-between gap-2.5 p-2.5 sm:p-3">
         {/* Top-Left Wilderness Watch & Thermometer */}
         <div className="pointer-events-auto flex flex-col gap-1 rounded-lg border border-white/15 bg-stone-950/60 px-2.5 py-1.5 shadow-sm">
@@ -291,6 +339,77 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
           )}
         </div>
 
+        {/* Top-Center Sleek Landmark Compass Ribbon */}
+        <div className="pointer-events-none hidden flex-col items-center sm:flex">
+          <div className="relative h-8 w-72 sm:w-80 overflow-hidden rounded-full border border-white/15 bg-stone-950/65 shadow-sm backdrop-blur-xs">
+            <div className="absolute left-1/2 top-0 h-1.5 w-0.5 -translate-x-1/2 bg-amber-400" />
+            {(
+              [
+                { label: 'N', ang: 0, color: 'text-amber-300 font-bold' },
+                { label: 'NE', ang: Math.PI * 0.25, color: 'text-stone-400' },
+                { label: 'E', ang: Math.PI * 0.5, color: 'text-stone-200 font-semibold' },
+                { label: 'SE', ang: Math.PI * 0.75, color: 'text-stone-400' },
+                { label: 'S', ang: Math.PI, color: 'text-stone-200 font-semibold' },
+                { label: 'SW', ang: -Math.PI * 0.75, color: 'text-stone-400' },
+                { label: 'W', ang: -Math.PI * 0.5, color: 'text-stone-200 font-semibold' },
+                { label: 'NW', ang: -Math.PI * 0.25, color: 'text-stone-400' },
+              ] as const
+            ).map((card) => {
+              let rel = card.ang + playerYaw;
+              while (rel > Math.PI) rel -= Math.PI * 2;
+              while (rel < -Math.PI) rel += Math.PI * 2;
+              if (Math.abs(rel) > 1.25) return null;
+              const leftPct = 50 + (rel / 1.2) * 50;
+              return (
+                <span
+                  key={card.label}
+                  className={`absolute top-1 -translate-x-1/2 font-mono text-[10px] ${card.color}`}
+                  style={{ left: `${leftPct}%` }}
+                >
+                  {card.label}
+                </span>
+              );
+            })}
+            {(() => {
+              const items = [
+                { label: 'Wreck', x: WORLD.WRECK_POS.x, z: WORLD.WRECK_POS.z, cls: 'bg-sky-300 text-sky-200' },
+                { label: 'Spring', x: WORLD.SPRING_POS.x, z: WORLD.SPRING_POS.z, cls: 'bg-cyan-400 text-cyan-200' },
+                { label: 'Camp', x: WORLD.ABANDONED_CAMP_POS.x, z: WORLD.ABANDONED_CAMP_POS.z, cls: 'bg-amber-400 text-amber-200' },
+                { label: 'Cave', x: WORLD.CAVE_GROTTO_POS.x, z: WORLD.CAVE_GROTTO_POS.z, cls: 'bg-purple-400 text-purple-200' },
+                { label: 'Ruins', x: WORLD.ANCIENT_RUINS_POS.x, z: WORLD.ANCIENT_RUINS_POS.z, cls: 'bg-emerald-400 text-emerald-200' },
+                { label: 'Station', x: WORLD.RESEARCH_STATION_POS.x, z: WORLD.RESEARCH_STATION_POS.z, cls: 'bg-rose-400 text-rose-200' },
+                { label: 'Dock', x: WORLD.BOAT_DOCK_POS.x, z: WORLD.BOAT_DOCK_POS.z, cls: 'bg-teal-400 text-teal-200' },
+              ]
+                .map((lm) => {
+                  const dx = lm.x - state.player.x;
+                  const dz = lm.z - state.player.z;
+                  const distSq = dx * dx + dz * dz;
+                  let rel = Math.atan2(dx, -dz) + playerYaw;
+                  while (rel > Math.PI) rel -= Math.PI * 2;
+                  while (rel < -Math.PI) rel += Math.PI * 2;
+                  return { ...lm, distSq, rel, leftPct: 50 + (rel / 1.2) * 50 };
+                })
+                .filter((lm) => lm.distSq >= 16 && Math.abs(lm.rel) <= 1.12)
+                .sort((a, b) => a.distSq - b.distSq);
+              const occupiedPcts: number[] = [];
+              return items.map((lm) => {
+                const showText = occupiedPcts.every((p) => Math.abs(p - lm.leftPct) >= 16);
+                if (showText) occupiedPcts.push(lm.leftPct);
+                return (
+                  <span
+                    key={lm.label}
+                    className="absolute bottom-1 flex -translate-x-1/2 items-center gap-0.5 text-[8.5px] font-medium"
+                    style={{ left: `${lm.leftPct}%` }}
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full ${lm.cls.split(' ')[0]}`} />
+                    {showText && <span className={lm.cls.split(' ')[1]}>{lm.label}</span>}
+                  </span>
+                );
+              });
+            })()}
+          </div>
+        </div>
+
         {/* Top-Right Objective Tracker & Quick Buttons */}
         <div className="flex flex-col items-end gap-1.5">
           <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1">
@@ -330,6 +449,17 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
               <Backpack className="h-3.5 w-3.5 text-amber-400" />
               <span>Craft [Tab]</span>
             </button>
+            {onTogglePhotoMode && (
+              <button
+                type="button"
+                onClick={onTogglePhotoMode}
+                aria-label="Toggle Photo Mode"
+                title="Photo Mode [P]"
+                className="rounded-md border border-white/10 bg-stone-950/45 p-1.5 text-stone-300 transition hover:border-amber-400/50 hover:text-amber-200"
+              >
+                <Camera className="h-3.5 w-3.5" />
+              </button>
+            )}
             <button
               type="button"
               onClick={onToggleMute}
@@ -391,20 +521,47 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
           )}
         </div>
       </div>
+      )}
 
-      {/* Center Reticle & Contextual Interaction Prompt (hidden while steering boat offshore) */}
+      {/* Center Reticle & Contextual Interaction Prompt (hidden while steering boat offshore or in Photo Mode) */}
+      {!photoMode && (
       <div className="fixed inset-0 flex flex-col items-center justify-center pointer-events-none">
         {state.voyage.phase === 'docked' && (
           <>
-            <div
-              className={`h-2 w-2 rounded-full border transition-transform duration-150 ${
-                hoveredTarget
-                  ? hoveredTarget.canInteract
-                    ? 'scale-125 border-amber-300 bg-amber-400/80'
-                    : 'scale-110 border-red-400 bg-red-500/60'
-                  : 'border-white/70 bg-white/30'
-              }`}
-            />
+            <div className="relative flex items-center justify-center">
+              {holdInteractProgress > 0.02 && (
+                <svg className="absolute h-7 w-7 -rotate-90" viewBox="0 0 28 28">
+                  <circle
+                    cx="14"
+                    cy="14"
+                    r="11"
+                    fill="none"
+                    stroke="rgba(255,255,255,0.22)"
+                    strokeWidth="2.5"
+                  />
+                  <circle
+                    cx="14"
+                    cy="14"
+                    r="11"
+                    fill="none"
+                    stroke="#fbbf24"
+                    strokeWidth="2.5"
+                    strokeDasharray={2 * Math.PI * 11}
+                    strokeDashoffset={2 * Math.PI * 11 * (1 - Math.min(1, holdInteractProgress))}
+                    strokeLinecap="round"
+                  />
+                </svg>
+              )}
+              <div
+                className={`h-2 w-2 rounded-full border transition-transform duration-150 ${
+                  hoveredTarget
+                    ? hoveredTarget.canInteract
+                      ? 'scale-125 border-amber-300 bg-amber-400/80'
+                      : 'scale-110 border-red-400 bg-red-500/60'
+                    : 'border-white/70 bg-white/30'
+                }`}
+              />
+            </div>
 
             {hoveredTarget && (
               <div className="mt-5 rounded-lg border border-stone-700/85 bg-stone-950/85 px-3.5 py-2 text-center shadow-xl">
@@ -430,8 +587,56 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
           </div>
         )}
       </div>
+      )}
+
+      {/* Photo Mode Minimalist Studio Overlay */}
+      {photoMode && (
+        <div className="fixed inset-x-0 bottom-5 z-40 flex justify-center px-4">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-2xl border border-white/20 bg-stone-950/85 px-4 py-2.5 shadow-2xl backdrop-blur-md">
+            <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-amber-300">
+              <Camera className="h-3.5 w-3.5" /> Photo Mode
+            </span>
+            <span className="text-[11px] text-stone-400">WASD + Space/Q Free-Fly · Drag Look</span>
+            <div className="flex items-center gap-1 border-l border-white/15 pl-2">
+              {PART5_IMMERSION_TUNING.PHOTO_FILTER_NAMES.map((name, idx) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => onChangePhotoFilter?.(idx)}
+                  className={`rounded-md px-2 py-1 text-[10.5px] font-semibold transition ${
+                    photoFilter === idx
+                      ? 'bg-amber-500 text-stone-950'
+                      : 'bg-stone-800/90 text-stone-300 hover:bg-stone-700'
+                  }`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+            {onCapturePhoto && (
+              <button
+                type="button"
+                onClick={onCapturePhoto}
+                className="rounded-lg bg-emerald-500 px-3 py-1 text-xs font-bold text-stone-950 hover:bg-emerald-400"
+              >
+                Capture PNG
+              </button>
+            )}
+            {onTogglePhotoMode && (
+              <button
+                type="button"
+                onClick={onTogglePhotoMode}
+                className="rounded-lg border border-white/15 bg-stone-800 px-2.5 py-1 text-xs font-semibold text-stone-200 hover:bg-stone-700"
+              >
+                Exit [P]
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Bottom Area: Vitals + Hotbar + Safely Framed Controls Hint */}
+      {!photoMode && (
       <div className="fixed inset-x-0 bottom-0 flex flex-col gap-1.5 px-3 pb-3">
         <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
           {/* Bottom-Left Needs Vitals (compact sleek bars) */}
@@ -522,6 +727,48 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
                 · {tempStage.stage}
               </span>
             </div>
+
+            {/* Stance Badge */}
+            <div className="flex items-center justify-between border-t border-white/10 pt-1 text-[10px] font-light tracking-wider text-stone-400">
+              <span>STANCE</span>
+              <span
+                className={`rounded px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-widest ${
+                  playerContext.stance === 'prone'
+                    ? 'bg-emerald-950/80 text-emerald-300'
+                    : playerContext.stance === 'sit'
+                      ? 'bg-amber-950/80 text-amber-300'
+                      : playerContext.stance === 'crouch'
+                        ? 'bg-sky-950/80 text-sky-300'
+                        : playerContext.stance === 'sleep'
+                          ? 'bg-indigo-950/80 text-indigo-300'
+                          : 'bg-white/10 text-stone-200'
+                }`}
+              >
+                {playerContext.stance ?? 'stand'}
+                {playerContext.stance === 'sit' ? ' · Rest+' : ''}
+              </span>
+            </div>
+
+            {/* Underwater O2 Breath Meter (visible when diving/holding breath) */}
+            {oxygen < 99.5 && (
+              <div className="flex items-center gap-1.5 border-t border-white/10 pt-1">
+                <Wind className="h-3 w-3 shrink-0 text-cyan-300" />
+                <div className="flex-1">
+                  <div className="flex justify-between text-[10px] font-medium tracking-wider text-cyan-200">
+                    <span>OXYGEN</span>
+                    <span className="font-mono">{Math.round(oxygen)}%</span>
+                  </div>
+                  <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className={`h-full transition-all duration-150 ${
+                        oxygen < 25 ? 'animate-pulse bg-rose-400' : 'bg-cyan-400'
+                      }`}
+                      style={{ width: `${Math.max(0, Math.min(100, oxygen))}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Bottom-Center 6-Slot Quick Hotbar + Item Pickup Pop-ups */}
@@ -681,6 +928,37 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
         </div>
         </div>
 
+        {/* Contextual First-Time Hint + Closed Captions Stack */}
+        {tutorialHint && (
+          <div className="flex justify-center">
+            <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-amber-500/40 bg-stone-950/85 px-3 py-1.5 text-[11px] text-amber-100 shadow-lg">
+              <span>{tutorialHint.text}</span>
+              {onDismissTutorialHint && (
+                <button
+                  type="button"
+                  onClick={onDismissTutorialHint}
+                  className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 hover:bg-amber-500/35"
+                >
+                  Got it
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {captions.length > 0 && (
+          <div className="flex flex-col items-center gap-1">
+            {captions.map((cap) => (
+              <div
+                key={cap.id}
+                className="rounded-full border border-white/15 bg-stone-950/80 px-3 py-0.5 text-[10.5px] font-medium tracking-wide text-stone-200 shadow"
+              >
+                {cap.text}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Controls Hint Bar (always fits completely on screen, toggles with [H], auto-hides cleanly) */}
         <div className="flex justify-center">
           {showControlsHint ? (
@@ -690,7 +968,7 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
               title="Click or press [H] to hide controls hints"
               className="pointer-events-auto max-w-[95vw] rounded-md border border-white/10 bg-stone-950/45 px-2.5 py-1 text-center text-[10.5px] font-light tracking-wide text-stone-300 transition hover:border-white/25 hover:text-stone-100"
             >
-              [WASD] Move · [Space] Jump · [Shift] Sprint · [E/Click] Interact · [B] Build · [Tab/I] Craft · [J] Journal · [M] Map · [H] Hide Hints
+              [WASD] Move · [Space] Jump · [Shift] Sprint · [C] Crouch (Hold Prone) · [Z] Prone · [X] Sit · [E/Click] Interact · [F/T] Inspect · [P] Photo · [B] Build · [Tab/I] Craft · [J] Journal · [M] Map · [H] Hide Hints
             </button>
           ) : (
             <button
@@ -704,6 +982,7 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
           )}
         </div>
       </div>
+      )}
     </div>
   );
 };

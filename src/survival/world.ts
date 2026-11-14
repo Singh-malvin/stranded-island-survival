@@ -1,9 +1,15 @@
 // Pure world geography, sculpted spread-out terrain heightmap, Act 1/2/3 barrier gating,
 // zone classification, gate unlocking, and Fog-of-War map helpers. No Three.js or React imports.
 
-import { COLLISION_TUNING, SAVE, WORLD } from './config.ts';
+import { COLLISION_TUNING, PART5_IMMERSION_TUNING, SAVE, STANCE_TUNING, WORLD } from './config.ts';
 import { countItem, removeItem } from './items.ts';
-import type { BarrierGateDef, MapZoneId, SurvivalState } from './types.ts';
+import type {
+  BarrierGateDef,
+  MapZoneId,
+  PlacedShelter,
+  PlayerStance,
+  SurvivalState,
+} from './types.ts';
 
 export interface IslandZoneMeta {
   id: MapZoneId;
@@ -1085,4 +1091,125 @@ export function classifyStepSurface(
     return 'sand';
   }
   return 'grass';
+}
+
+// ---------------------------------------------------------------------------
+// STANCE OVERHEAD CLEARANCE & CRAWL SPACES (Part 3)
+// ---------------------------------------------------------------------------
+
+export interface OverheadCeilingZone {
+  id: string;
+  label: string;
+  x: number;
+  z: number;
+  radius: number;
+  ceilingHeightM: number;
+}
+
+/**
+ * Natural & wreckage crawlspaces / low overhangs where standing upright is physically blocked
+ * while crouch/prone/sit can occupy the space.
+ */
+export const WORLD_LOW_CEILING_ZONES: OverheadCeilingZone[] = [
+  {
+    id: 'wing_undercut',
+    label: 'Flight 404 wing overhang',
+    x: WORLD.WRECK_POS.x + 5.2,
+    z: WORLD.WRECK_POS.z + 2.4,
+    radius: 2.35,
+    ceilingHeightM: 1.08,
+  },
+  {
+    id: 'camp_lean_to',
+    label: 'Abandoned camp lean-to roof',
+    x: WORLD.ABANDONED_CAMP_POS.x + 1.5,
+    z: WORLD.ABANDONED_CAMP_POS.z - 2.0,
+    radius: 1.85,
+    ceilingHeightM: 1.24,
+  },
+  {
+    id: 'cave_low_arch',
+    label: 'Basalt cave low arch',
+    x: WORLD.CAVE_GROTTO_POS.x - 4.4,
+    z: WORLD.CAVE_GROTTO_POS.z + 3.2,
+    radius: 2.25,
+    ceilingHeightM: 1.15,
+  },
+];
+
+export function requiredClearanceForStance(stance: PlayerStance): number {
+  switch (stance) {
+    case 'crouch':
+      return STANCE_TUNING.CLEARANCE_CROUCH_M;
+    case 'sit':
+      return STANCE_TUNING.CLEARANCE_SIT_M;
+    case 'prone':
+    case 'sleep':
+      return STANCE_TUNING.CLEARANCE_PRONE_M;
+    case 'stand':
+    default:
+      return STANCE_TUNING.CLEARANCE_STAND_M;
+  }
+}
+
+export function getOverheadCeilingClearance(
+  x: number,
+  z: number,
+  shelters: PlacedShelter[] = [],
+  rayClearanceM: number = Infinity
+): { hasCeiling: boolean; clearanceM: number; reason: string } {
+  let clearanceM = Number.isFinite(rayClearanceM) ? Math.max(0.45, rayClearanceM) : Infinity;
+  let reason = clearanceM < STANCE_TUNING.CLEARANCE_STAND_M ? 'Overhead structure' : '';
+
+  for (const zone of WORLD_LOW_CEILING_ZONES) {
+    if (Math.hypot(x - zone.x, z - zone.z) <= zone.radius && zone.ceilingHeightM < clearanceM) {
+      clearanceM = zone.ceilingHeightM;
+      reason = zone.label;
+    }
+  }
+
+  for (const shelter of shelters) {
+    if (Math.hypot(x - shelter.x, z - shelter.z) <= 1.48 && 1.28 < clearanceM) {
+      clearanceM = 1.28;
+      reason = 'Palm lean-to shelter roof';
+    }
+  }
+
+  return {
+    hasCeiling: clearanceM < STANCE_TUNING.CLEARANCE_STAND_M,
+    clearanceM,
+    reason,
+  };
+}
+
+export function canEnterStance(
+  targetStance: PlayerStance,
+  x: number,
+  z: number,
+  shelters: PlacedShelter[] = [],
+  rayClearanceM: number = Infinity
+): { allowed: boolean; reason?: string; maxClearanceM: number } {
+  const needed = requiredClearanceForStance(targetStance);
+  const { clearanceM, reason } = getOverheadCeilingClearance(x, z, shelters, rayClearanceM);
+  if (clearanceM < needed) {
+    return {
+      allowed: false,
+      reason: `Not enough headroom (${reason || 'low overhead'})`,
+      maxClearanceM: clearanceM,
+    };
+  }
+  return { allowed: true, maxClearanceM: clearanceM };
+}
+
+/**
+ * Semi-diurnal coastal tide height offset (metres) & instantaneous water elevation.
+ * Rises and falls smoothly over ~12.4 game hours so low tide exposes wider beach flats.
+ */
+export function getOceanTideOffset(totalHours: number): number {
+  const phase = (totalHours / PART5_IMMERSION_TUNING.TIDE_CYCLE_HOURS) * Math.PI * 2;
+  return Math.sin(phase) * PART5_IMMERSION_TUNING.TIDE_AMPLITUDE_M;
+}
+
+export function getEffectiveWaterLevel(totalHours: number): number {
+  return WORLD.WATER_LEVEL + getOceanTideOffset(totalHours);
 }

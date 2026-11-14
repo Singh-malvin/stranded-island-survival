@@ -11,21 +11,52 @@ class AudioManager {
   private ctx: AudioContext | null = null;
   private isMuted: boolean = false;
   private masterGain: GainNode | null = null;
+  private masterMuffleFilter: BiquadFilterNode | null = null;
 
   // Ambient sound nodes
   private waveGain: GainNode | null = null;
   private rainGain: GainNode | null = null;
   private windGain: GainNode | null = null;
   private fireGain: GainNode | null = null;
+  private springGain: GainNode | null = null;
   private insectGain: GainNode | null = null;
   private calmPadGain: GainNode | null = null;
   private tensePadGain: GainNode | null = null;
 
+  // 3D spatial panners
+  private surfPanner: PannerNode | null = null;
+  private campfirePanner: PannerNode | null = null;
+  private springPanner: PannerNode | null = null;
+
+  // Biome & closed caption state
   private lastHeartbeatMs: number = 0;
+  private lastBirdChirpMs: number = 0;
+  private lastCaveDripMs: number = 0;
+  private lastCaptionMs: Record<string, number> = {};
+  private captionCb: ((text: string) => void) | null = null;
   private isAmbientRunning: boolean = false;
 
   constructor() {
     // AudioContext will be initialized on first user gesture
+  }
+
+  public setCaptionCallback(cb: ((text: string) => void) | null) {
+    this.captionCb = cb;
+  }
+
+  public emitCaption(text: string, cooldownMs: number = 4200) {
+    if (!this.captionCb || this.isMuted) return;
+    const now = performance.now();
+    if ((this.lastCaptionMs[text] ?? 0) + cooldownMs > now) return;
+    this.lastCaptionMs[text] = now;
+    this.captionCb(text);
+  }
+
+  public setMuffleLevel(muffle01: number) {
+    if (!this.ctx || !this.masterMuffleFilter) return;
+    const clamped = Math.max(0, Math.min(1, muffle01));
+    const targetHz = 19500 * Math.pow(0.025, clamped); // 19.5kHz clear -> ~490Hz deep underwater/low-HP muffle
+    this.masterMuffleFilter.frequency.setTargetAtTime(targetHz, this.ctx.currentTime, 0.08);
   }
 
   private initContext() {
@@ -34,7 +65,12 @@ class AudioManager {
       this.ctx = new AudioCtx();
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 0.8, this.ctx.currentTime);
-      this.masterGain.connect(this.ctx.destination);
+      this.masterMuffleFilter = this.ctx.createBiquadFilter();
+      this.masterMuffleFilter.type = 'lowpass';
+      this.masterMuffleFilter.frequency.setValueAtTime(19500, this.ctx.currentTime);
+      this.masterMuffleFilter.Q.setValueAtTime(0.7, this.ctx.currentTime);
+      this.masterGain.connect(this.masterMuffleFilter);
+      this.masterMuffleFilter.connect(this.ctx.destination);
       this.setupAmbientGenerators();
     }
     if (this.ctx.state === 'suspended') {
@@ -76,7 +112,7 @@ class AudioManager {
     const noiseBuffer = this.createNoiseBuffer(3);
     if (!noiseBuffer) return;
 
-    // Ocean Waves loop
+    // Ocean Waves loop + spatial shoreline panner
     const waveSource = this.ctx.createBufferSource();
     waveSource.buffer = noiseBuffer;
     waveSource.loop = true;
@@ -88,9 +124,17 @@ class AudioManager {
     this.waveGain = this.ctx.createGain();
     this.waveGain.gain.setValueAtTime(0.2, this.ctx.currentTime);
 
+    this.surfPanner = this.ctx.createPanner();
+    this.surfPanner.panningModel = 'equalpower';
+    this.surfPanner.distanceModel = 'inverse';
+    this.surfPanner.refDistance = 8;
+    this.surfPanner.maxDistance = 95;
+    this.surfPanner.rolloffFactor = 0.85;
+
     waveSource.connect(waveFilter);
     waveFilter.connect(this.waveGain);
-    this.waveGain.connect(this.masterGain);
+    this.waveGain.connect(this.surfPanner);
+    this.surfPanner.connect(this.masterGain);
     waveSource.start();
 
     // Slow LFO for ocean wave swells (period ~7s)
@@ -138,7 +182,7 @@ class AudioManager {
     this.windGain.connect(this.masterGain);
     windSource.start();
 
-    // Fire crackle noise
+    // Fire crackle noise + spatial campfire panner
     const fireSource = this.ctx.createBufferSource();
     fireSource.buffer = noiseBuffer;
     fireSource.loop = true;
@@ -151,10 +195,40 @@ class AudioManager {
     this.fireGain = this.ctx.createGain();
     this.fireGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
 
+    this.campfirePanner = this.ctx.createPanner();
+    this.campfirePanner.panningModel = 'equalpower';
+    this.campfirePanner.distanceModel = 'inverse';
+    this.campfirePanner.refDistance = 3.5;
+    this.campfirePanner.maxDistance = 38;
+    this.campfirePanner.rolloffFactor = 1.2;
+
     fireSource.connect(fireFilter);
     fireFilter.connect(this.fireGain);
-    this.fireGain.connect(this.masterGain);
+    this.fireGain.connect(this.campfirePanner);
+    this.campfirePanner.connect(this.masterGain);
     fireSource.start();
+
+    // Freshwater spring trickle loop + spatial spring panner
+    const springSource = this.ctx.createBufferSource();
+    springSource.buffer = noiseBuffer;
+    springSource.loop = true;
+    const springFilter = this.ctx.createBiquadFilter();
+    springFilter.type = 'bandpass';
+    springFilter.frequency.setValueAtTime(1950, this.ctx.currentTime);
+    springFilter.Q.setValueAtTime(2.6, this.ctx.currentTime);
+    this.springGain = this.ctx.createGain();
+    this.springGain.gain.setValueAtTime(0.0, this.ctx.currentTime);
+    this.springPanner = this.ctx.createPanner();
+    this.springPanner.panningModel = 'equalpower';
+    this.springPanner.distanceModel = 'inverse';
+    this.springPanner.refDistance = 4;
+    this.springPanner.maxDistance = 42;
+    this.springPanner.rolloffFactor = 1.15;
+    springSource.connect(springFilter);
+    springFilter.connect(this.springGain);
+    this.springGain.connect(this.springPanner);
+    this.springPanner.connect(this.masterGain);
+    springSource.start();
 
     // Night crickets / coastal insect chorus (chirp-modulated high carrier)
     const cricketCarrier = this.ctx.createOscillator();
@@ -447,6 +521,7 @@ class AudioManager {
   public playThunder() {
     this.initContext();
     if (!this.ctx || !this.masterGain || this.isMuted) return;
+    this.emitCaption('[Thunderclap]', 3000);
     const t = this.ctx.currentTime;
 
     // Low rumble + explosive crack
@@ -688,6 +763,430 @@ class AudioManager {
     filter.connect(gain);
     gain.connect(this.masterGain);
     noise.start(t);
+  }
+
+  /** Crisp organic chewing / bite crunch sound for eating food. */
+  public playEat() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.24);
+    if (!buf) return;
+    for (let bite = 0; bite < 2; bite++) {
+      const start = t + bite * 0.13;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(1450 - bite * 220, start);
+      filter.Q.setValueAtTime(1.8, start);
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.14, start);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.09);
+      src.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.masterGain);
+      src.start(start);
+      src.stop(start + 0.1);
+    }
+  }
+
+  /** Heavy timber crack + leafy crash thud when chopping down a palm/tree. */
+  public playWoodCrack() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.75);
+    if (buf) {
+      const crack = this.ctx.createBufferSource();
+      crack.buffer = buf;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.setValueAtTime(980, t);
+      f.frequency.exponentialRampToValueAtTime(190, t + 0.35);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.26, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+      crack.connect(f);
+      f.connect(g);
+      g.connect(this.masterGain);
+      crack.start(t);
+    }
+    const thud = this.ctx.createOscillator();
+    const tg = this.ctx.createGain();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(108, t + 0.38);
+    thud.frequency.exponentialRampToValueAtTime(34, t + 0.72);
+    tg.gain.setValueAtTime(0.001, t);
+    tg.gain.setValueAtTime(0.28, t + 0.38);
+    tg.gain.exponentialRampToValueAtTime(0.001, t + 0.76);
+    thud.connect(tg);
+    tg.connect(this.masterGain);
+    thud.start(t + 0.36);
+    thud.stop(t + 0.8);
+  }
+
+  /** Flint spark strike + whooshing flame ignition for lighting campfires. */
+  public playSparkIgnite() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.45);
+    if (buf) {
+      const s = this.ctx.createBufferSource();
+      s.buffer = buf;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.setValueAtTime(2800, t);
+      f.frequency.exponentialRampToValueAtTime(420, t + 0.42);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.2, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.42);
+      s.connect(f);
+      f.connect(g);
+      g.connect(this.masterGain);
+      s.start(t);
+    }
+    const tick = this.ctx.createOscillator();
+    const tg = this.ctx.createGain();
+    tick.type = 'triangle';
+    tick.frequency.setValueAtTime(2400, t);
+    tick.frequency.exponentialRampToValueAtTime(640, t + 0.045);
+    tg.gain.setValueAtTime(0.16, t);
+    tg.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    tick.connect(tg);
+    tg.connect(this.masterGain);
+    tick.start(t);
+    tick.stop(t + 0.06);
+  }
+
+  /** Cloth wrapping / tightening rustle for healing bandages & poultices. */
+  public playBandageWrap() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.38);
+    if (!buf) return;
+    for (let i = 0; i < 2; i++) {
+      const start = t + i * 0.18;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(1600, start);
+      filter.Q.setValueAtTime(1.1, start);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.001, start);
+      g.gain.linearRampToValueAtTime(0.11, start + 0.06);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.17);
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(this.masterGain);
+      src.start(start);
+      src.stop(start + 0.18);
+    }
+  }
+
+  /** Crisp paper unfold rustle when glancing at map or survival journal. */
+  public playPaperRustle() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.18);
+    if (!buf) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'highpass';
+    f.frequency.setValueAtTime(2100, t);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.09, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.17);
+    src.connect(f);
+    f.connect(g);
+    g.connect(this.masterGain);
+    src.start(t);
+  }
+
+  /** Water breaststroke splash pulse while swimming. */
+  public playSwimStroke() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.32);
+    if (!buf) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(620, t);
+    f.frequency.exponentialRampToValueAtTime(260, t + 0.28);
+    f.Q.setValueAtTime(0.95, t);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.01, t);
+    g.gain.linearRampToValueAtTime(0.14, t + 0.07);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.30);
+    src.connect(f);
+    f.connect(g);
+    g.connect(this.masterGain);
+    src.start(t);
+  }
+
+  /** Quiet hypothermic shiver breath/teeth chatter cue. */
+  public playShiverChatter() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 4; i++) {
+      const start = t + i * 0.065;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(420 + (i % 2) * 90, start);
+      g.gain.setValueAtTime(0.025, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.035);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(start);
+      osc.stop(start + 0.04);
+    }
+  }
+
+  /** Muted dry cough cue when sick from spoiled food or foul water. */
+  public playCough() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.26);
+    if (!buf) return;
+    for (let i = 0; i < 2; i++) {
+      const start = t + i * 0.14;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.setValueAtTime(520 - i * 80, start);
+      f.Q.setValueAtTime(2.2, start);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.12, start);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.11);
+      src.connect(f);
+      f.connect(g);
+      g.connect(this.masterGain);
+      src.start(start);
+      src.stop(start + 0.12);
+    }
+  }
+
+  /** Spatial 3D audio listener + dynamic biome creatures, cave drips, spring trickle & captions. */
+  public updateSpatialAndBiomeAmbience(params: {
+    listenerPos: { x: number; y: number; z: number };
+    listenerForward: { x: number; y: number; z: number };
+    surfPos: { x: number; y: number; z: number };
+    springPos: { x: number; y: number; z: number };
+    campfirePos: { x: number; y: number; z: number } | null;
+    inCave: boolean;
+    inForest: boolean;
+    isNight: boolean;
+    rainIntensity: number;
+    nearOcean: boolean;
+    health: number;
+    underwater: boolean;
+  }) {
+    if (!this.ctx || !this.isAmbientRunning) return;
+    const t = this.ctx.currentTime;
+
+    // 1. Update listener transform
+    const L = this.ctx.listener;
+    if (L.positionX) {
+      L.positionX.setValueAtTime(params.listenerPos.x, t);
+      L.positionY.setValueAtTime(params.listenerPos.y, t);
+      L.positionZ.setValueAtTime(params.listenerPos.z, t);
+      L.forwardX.setValueAtTime(params.listenerForward.x, t);
+      L.forwardY.setValueAtTime(params.listenerForward.y, t);
+      L.forwardZ.setValueAtTime(params.listenerForward.z, t);
+      L.upX.setValueAtTime(0, t);
+      L.upY.setValueAtTime(1, t);
+      L.upZ.setValueAtTime(0, t);
+    }
+
+    // 2. Position 3D panners
+    const setPan = (p: PannerNode | null, pos: { x: number; y: number; z: number }) => {
+      if (!p) return;
+      if (p.positionX) {
+        p.positionX.setValueAtTime(pos.x, t);
+        p.positionY.setValueAtTime(pos.y, t);
+        p.positionZ.setValueAtTime(pos.z, t);
+      } else {
+        p.setPosition(pos.x, pos.y, pos.z);
+      }
+    };
+    setPan(this.surfPanner, params.surfPos);
+    setPan(this.springPanner, params.springPos);
+    if (params.campfirePos) {
+      setPan(this.campfirePanner, params.campfirePos);
+    }
+
+    if (this.springGain) {
+      const dx = params.listenerPos.x - params.springPos.x;
+      const dz = params.listenerPos.z - params.springPos.z;
+      const dSpring = Math.hypot(dx, dz);
+      const springTarget = Math.max(0, 1 - dSpring / 34) * (params.inCave ? 0.04 : 0.14);
+      this.springGain.gain.setTargetAtTime(springTarget, t, 0.35);
+    }
+
+    // 3. Muffle master audio when underwater or critically wounded
+    const hpMuffle = params.health < 32 ? ((32 - params.health) / 32) * 0.55 : 0;
+    const totalMuffle = params.underwater ? 0.96 : hpMuffle;
+    this.setMuffleLevel(totalMuffle);
+
+    // 4. Procedural daytime forest bird chirps & cave water drips
+    const nowMs = performance.now();
+    if (
+      !this.isMuted &&
+      !params.underwater &&
+      !params.isNight &&
+      !params.inCave &&
+      params.inForest &&
+      params.rainIntensity < 0.35 &&
+      nowMs - this.lastBirdChirpMs > 3400 + Math.random() * 4800
+    ) {
+      this.lastBirdChirpMs = nowMs;
+      this.playBirdChirp();
+      this.emitCaption('[Tropical Birds Chirping]', 8500);
+    } else if (
+      !this.isMuted &&
+      !params.underwater &&
+      params.inCave &&
+      nowMs - this.lastCaveDripMs > 2600 + Math.random() * 3400
+    ) {
+      this.lastCaveDripMs = nowMs;
+      this.playCaveDrip();
+      this.emitCaption('[Cave Water Drip]', 7000);
+    }
+
+    // 5. Environmental closed captions
+    if (!this.isMuted) {
+      if (params.underwater) {
+        this.emitCaption('[Submerged Muffled Water]', 5000);
+      } else if (params.campfirePos) {
+        const dc = Math.hypot(
+          params.listenerPos.x - params.campfirePos.x,
+          params.listenerPos.z - params.campfirePos.z
+        );
+        if (dc < 8) this.emitCaption('[Campfire Crackling]', 9500);
+      } else if (params.nearOcean) {
+        this.emitCaption('[Ocean Surf Breaking]', 11000);
+      }
+    }
+  }
+
+  private playBirdChirp() {
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const notes = 2 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < notes; i++) {
+      const start = t + i * 0.11;
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = 'sine';
+      const f0 = 2400 + Math.random() * 900;
+      osc.frequency.setValueAtTime(f0, start);
+      osc.frequency.exponentialRampToValueAtTime(f0 * (1.22 + Math.random() * 0.15), start + 0.045);
+      osc.frequency.exponentialRampToValueAtTime(f0 * 0.92, start + 0.085);
+      g.gain.setValueAtTime(0.001, start);
+      g.gain.linearRampToValueAtTime(0.042, start + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.09);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(start);
+      osc.stop(start + 0.095);
+    }
+  }
+
+  private playCaveDrip() {
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = 'sine';
+    const base = 980 + Math.random() * 440;
+    osc.frequency.setValueAtTime(base, t);
+    osc.frequency.exponentialRampToValueAtTime(base * 1.48, t + 0.065);
+    g.gain.setValueAtTime(0.065, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    osc.connect(g);
+    g.connect(this.masterGain);
+    osc.start(t);
+    osc.stop(t + 0.17);
+  }
+
+  /** Explicit public heartbeat cue for critical health/oxygen distress. */
+  public playHeartbeat(intensity: number = 0.7) {
+    this.initContext();
+    this.playHeartbeatPulse(Math.max(0.15, Math.min(1.2, intensity)));
+    this.emitCaption('[Heavy Heartbeat]', 5000);
+  }
+
+  /** Sharp wood + stone snap when a tool's durability hits zero. */
+  public playToolBreak() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    this.emitCaption('[Tool Shattered!]', 2000);
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.32);
+    if (buf) {
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.setValueAtTime(1600, t);
+      f.Q.setValueAtTime(1.4, t);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.38, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+      src.connect(f);
+      f.connect(g);
+      g.connect(this.masterGain);
+      src.start(t);
+    }
+    [320, 195].forEach((freq, i) => {
+      const osc = this.ctx!.createOscillator();
+      const g = this.ctx!.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t + i * 0.045);
+      osc.frequency.exponentialRampToValueAtTime(65, t + i * 0.045 + 0.14);
+      g.gain.setValueAtTime(0.28, t + i * 0.045);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.045 + 0.15);
+      osc.connect(g);
+      g.connect(this.masterGain!);
+      osc.start(t + i * 0.045);
+      osc.stop(t + i * 0.045 + 0.16);
+    });
+  }
+
+  /** Heavy water plunge splash when entering deep water or surfacing. */
+  public playSplash(intensity: number = 0.85) {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    this.emitCaption('[Water Splash]', 3200);
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.45);
+    if (!buf) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.setValueAtTime(920, t);
+    f.frequency.exponentialRampToValueAtTime(240, t + 0.42);
+    f.Q.setValueAtTime(0.85, t);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.28 * intensity, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.44);
+    src.connect(f);
+    f.connect(g);
+    g.connect(this.masterGain);
+    src.start(t);
   }
 }
 

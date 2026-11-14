@@ -635,3 +635,76 @@ export function computeCurrentAct(state: SurvivalState): SurvivalState['act'] {
 export function getCurrentObjective(steps: ObjectiveStep[]): ObjectiveStep | null {
   return steps.find((s) => !s.completed) ?? (steps.length > 0 ? steps[steps.length - 1] : null);
 }
+
+export interface SurvivalMilestone {
+  id: string;
+  title: string;
+  description: string;
+  unlocked: boolean;
+}
+
+/** Computes Part 5 survivor milestones for the Journal & Death Summary screen. */
+export function computeMilestones(state: SurvivalState): SurvivalMilestone[] {
+  const f = state.flags ?? {};
+  return [
+    {
+      id: 'ms_first_fire',
+      title: 'Spark in the Dark',
+      description: 'Built and lit your first Stone Ring Campfire.',
+      unlocked: state.campfires.length > 0 || Boolean(f.cooked_boil_water),
+    },
+    {
+      id: 'ms_clean_water',
+      title: 'Safe to Drink',
+      description: 'Boiled clean water or drank safely from the Freshwater Spring.',
+      unlocked: Boolean(f.cooked_boil_water || f.drank_water_bottle_clean),
+    },
+    {
+      id: 'ms_shelter',
+      title: 'Home Under the Palms',
+      description: 'Built a Palm Lean-To Shelter to guard against storms.',
+      unlocked: state.shelters.length > 0,
+    },
+    {
+      id: 'ms_crash_clue',
+      title: 'Flight 404 Black Box',
+      description: 'Examined the crash wreckage manifest & distress logs.',
+      unlocked: state.cluesFound.includes('clue_crash_manifest'),
+    },
+    {
+      id: 'ms_cave_ruins',
+      title: 'Beneath the Basalt',
+      description: 'Explored the Basalt Caves and Ancient Ruins.',
+      unlocked:
+        state.unlockedGates.includes('gate_north_pass') ||
+        state.cluesFound.some((c) => c === 'clue_cave_note' || c === 'clue_ruins_tablet'),
+    },
+    {
+      id: 'ms_station',
+      title: 'Signal Restored',
+      description: 'Repaired systems at the Abandoned Research Station.',
+      unlocked:
+        Boolean(state.stationRepairs?.radio) ||
+        Boolean(state.stationRepairs?.generator) ||
+        Boolean(state.stationRepairs?.chart),
+    },
+    {
+      id: 'ms_crafter',
+      title: 'Island Engineer',
+      description: 'Crafted 10 or more tools, structures, or survival supplies.',
+      unlocked: state.stats.itemsCrafted >= 10,
+    },
+    {
+      id: 'ms_survivor_3',
+      title: 'Three Dawn Veteran',
+      description: 'Survived to Day 3 or beyond on the island.',
+      unlocked: state.clock.day >= 3,
+    },
+    {
+      id: 'ms_harbor',
+      title: 'Open Horizon',
+      description: 'Built the Escape Boat or reached Port Solis.',
+      unlocked: state.escapedCity || state.act >= 5,
+    },
+  ];
+}

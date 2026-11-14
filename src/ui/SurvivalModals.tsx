@@ -1,12 +1,15 @@
-import React from 'react';
-import { Flame, Compass, Skull, RotateCcw, Play, ShieldAlert, Sparkles } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Flame, Compass, Skull, RotateCcw, Play, ShieldAlert, Sparkles, Trophy } from 'lucide-react';
 import {
+  ControlKeybinds,
+  DEFAULT_KEYBINDS,
   ExtendedGraphicsSettings,
   FpsLimitOption,
   GRAPHICS_PRESETS,
   GraphicsQuality,
   ViewDistancePreset,
 } from '../scene/GraphicsConfig.ts';
+import { computeMilestones } from '../survival/quests.ts';
 import { SurvivalState } from '../survival/types.ts';
 
 interface TitleScreenProps {
@@ -171,6 +174,27 @@ export const SurvivalPauseModal: React.FC<PauseModalProps> = ({
   onResume,
   onRestart,
 }) => {
+  const [rebindingAction, setRebindingAction] = useState<keyof ControlKeybinds | null>(null);
+
+  useEffect(() => {
+    if (!rebindingAction || !extSettings || !onChangeExtendedSettings) return;
+    const onCapture = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code !== 'Escape') {
+        onChangeExtendedSettings({
+          keybinds: {
+            ...(extSettings.keybinds ?? DEFAULT_KEYBINDS),
+            [rebindingAction]: e.code,
+          },
+        });
+      }
+      setRebindingAction(null);
+    };
+    window.addEventListener('keydown', onCapture, true);
+    return () => window.removeEventListener('keydown', onCapture, true);
+  }, [rebindingAction, extSettings, onChangeExtendedSettings]);
+
   if (!isOpen) return null;
 
   const fpsOptions: Array<{ label: string; value: FpsLimitOption }> = [
@@ -185,9 +209,18 @@ export const SurvivalPauseModal: React.FC<PauseModalProps> = ({
     { label: 'Far', value: 'far' },
   ];
 
+  const keybindRows: Array<{ action: keyof ControlKeybinds; label: string }> = [
+    { action: 'interact', label: 'Interact' },
+    { action: 'jump', label: 'Jump' },
+    { action: 'crouch', label: 'Crouch' },
+    { action: 'prone', label: 'Prone' },
+    { action: 'sit', label: 'Sit / Rest+' },
+    { action: 'photoMode', label: 'Photo Mode' },
+  ];
+
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/75 p-4 font-sans text-stone-100">
-      <div className="w-full max-w-md rounded-xl border border-stone-700 bg-stone-950 p-6 shadow-2xl">
+      <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-xl border border-stone-700 bg-stone-950 p-6 shadow-2xl">
         <h2 className="text-xl font-bold text-stone-100">Expedition Paused</h2>
         <p className="mt-1 text-xs text-stone-400">
           Day {state.clock.day} • Items Gathered: {state.stats.itemsGathered} • Items Crafted:{' '}
@@ -312,6 +345,124 @@ export const SurvivalPauseModal: React.FC<PauseModalProps> = ({
                   ))}
                 </div>
               </div>
+
+              <div className="flex items-center justify-between border-t border-stone-800 pt-2">
+                <span className="font-medium text-stone-300">
+                  Camera FOV ({extSettings.fovDeg ?? 75}°)
+                </span>
+                <input
+                  type="range"
+                  min={60}
+                  max={100}
+                  step={2}
+                  value={extSettings.fovDeg ?? 75}
+                  onChange={(e) =>
+                    onChangeExtendedSettings({ fovDeg: Number(e.target.value) })
+                  }
+                  className="w-28 accent-amber-400"
+                />
+              </div>
+
+              <div className="flex items-center justify-between border-t border-stone-800 pt-2">
+                <span className="font-medium text-stone-300">
+                  Mouse Sensitivity ({(extSettings.mouseSensitivity ?? 1).toFixed(1)}x)
+                </span>
+                <input
+                  type="range"
+                  min={0.4}
+                  max={2.2}
+                  step={0.1}
+                  value={extSettings.mouseSensitivity ?? 1}
+                  onChange={(e) =>
+                    onChangeExtendedSettings({ mouseSensitivity: Number(e.target.value) })
+                  }
+                  className="w-28 accent-amber-400"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-1.5 border-t border-stone-800 pt-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeExtendedSettings({ motionBlur: !(extSettings.motionBlur ?? true) })
+                  }
+                  className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                    extSettings.motionBlur ?? true
+                      ? 'bg-emerald-600/80 text-white'
+                      : 'bg-stone-800 text-stone-400'
+                  }`}
+                >
+                  Blur: {extSettings.motionBlur ?? true ? 'ON' : 'OFF'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeExtendedSettings({ headBob: !(extSettings.headBob ?? true) })
+                  }
+                  className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                    extSettings.headBob ?? true
+                      ? 'bg-emerald-600/80 text-white'
+                      : 'bg-stone-800 text-stone-400'
+                  }`}
+                >
+                  Head-Bob: {extSettings.headBob ?? true ? 'ON' : 'OFF'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChangeExtendedSettings({
+                      closedCaptions: !(extSettings.closedCaptions ?? true),
+                    })
+                  }
+                  className={`rounded px-2 py-1 text-[10px] font-semibold ${
+                    extSettings.closedCaptions ?? true
+                      ? 'bg-amber-500 text-stone-950'
+                      : 'bg-stone-800 text-stone-400'
+                  }`}
+                >
+                  Captions: {extSettings.closedCaptions ?? true ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              <div className="border-t border-stone-800 pt-2">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="font-medium text-stone-300">Controls &amp; Keybinds</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onChangeExtendedSettings({ keybinds: { ...DEFAULT_KEYBINDS } })
+                    }
+                    className="rounded bg-stone-800 px-1.5 py-0.5 text-[10px] text-stone-300 hover:bg-stone-700"
+                  >
+                    Reset Keys
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {keybindRows.map((row) => {
+                    const code =
+                      (extSettings.keybinds ?? DEFAULT_KEYBINDS)[row.action] ??
+                      DEFAULT_KEYBINDS[row.action];
+                    const isListening = rebindingAction === row.action;
+                    return (
+                      <button
+                        key={row.action}
+                        type="button"
+                        onClick={() => setRebindingAction(isListening ? null : row.action)}
+                        className={`flex items-center justify-between rounded border px-2 py-1 text-[10.5px] ${
+                          isListening
+                            ? 'border-amber-400 bg-amber-950/50 text-amber-200'
+                            : 'border-stone-800 bg-stone-950/70 text-stone-300 hover:border-stone-600'
+                        }`}
+                      >
+                        <span>{row.label}</span>
+                        <span className="font-mono font-bold text-amber-300">
+                          {isListening ? 'Press Key...' : code.replace('Key', '')}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </>
           )}
         </div>
@@ -353,6 +504,7 @@ export const SurvivalDeathModal: React.FC<DeathModalProps> = ({
   onRestart,
 }) => {
   if (!isOpen) return null;
+  const unlocked = computeMilestones(state).filter((m) => m.unlocked);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-red-950/80 p-4 font-sans text-stone-100">
@@ -364,7 +516,51 @@ export const SurvivalDeathModal: React.FC<DeathModalProps> = ({
         <p className="mt-2 text-sm text-red-200">
           Succumbed to <span className="font-semibold">{causeOfDeath}</span> on Day {state.clock.day}.
         </p>
-        <p className="mt-2 text-xs text-stone-400">
+
+        <div className="mt-4 grid grid-cols-2 gap-2 rounded-lg border border-stone-800 bg-stone-900/75 p-3 text-left text-xs">
+          <div>
+            <span className="text-[10px] uppercase text-stone-400">Days Survived</span>
+            <div className="font-mono text-sm font-bold text-amber-300">{state.clock.day}</div>
+          </div>
+          <div>
+            <span className="text-[10px] uppercase text-stone-400">Distance Walked</span>
+            <div className="font-mono text-sm font-bold text-stone-100">
+              {Math.round(state.stats.distanceTravelled)} m
+            </div>
+          </div>
+          <div>
+            <span className="text-[10px] uppercase text-stone-400">Items Gathered</span>
+            <div className="font-mono text-sm font-bold text-emerald-300">
+              {state.stats.itemsGathered}
+            </div>
+          </div>
+          <div>
+            <span className="text-[10px] uppercase text-stone-400">Items Crafted</span>
+            <div className="font-mono text-sm font-bold text-sky-300">
+              {state.stats.itemsCrafted}
+            </div>
+          </div>
+        </div>
+
+        {unlocked.length > 0 && (
+          <div className="mt-3 rounded-lg border border-amber-900/50 bg-stone-900/50 p-2.5 text-left">
+            <div className="mb-1.5 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-300">
+              <Trophy className="h-3 w-3" /> Milestones Unlocked ({unlocked.length})
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {unlocked.slice(0, 6).map((m) => (
+                <span
+                  key={m.id}
+                  className="rounded border border-amber-600/30 bg-amber-950/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-200"
+                >
+                  {m.title}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <p className="mt-3 text-xs text-stone-400">
           Respawning at your last camp keeps all crafted tools, campfires, and progress (only 25% of loose raw materials are lost).
         </p>
 

@@ -8,10 +8,12 @@ import {
   Lock,
   Map as MapIcon,
   Save,
+  Trophy,
   X,
 } from 'lucide-react';
 import { SAVE, WORLD } from '../survival/config.ts';
 import {
+  computeMilestones,
   evaluateObjectivesForAct,
   getActLabel,
   STATION_REPAIR_DEFS,
@@ -27,7 +29,7 @@ import {
   sampleIslandHeight,
 } from '../survival/world.ts';
 
-export type JournalTab = 'objectives' | 'clues' | 'map';
+export type JournalTab = 'objectives' | 'clues' | 'map' | 'milestones';
 
 interface JournalMapModalProps {
   isOpen: boolean;
@@ -47,6 +49,8 @@ export const JournalMapModal: React.FC<JournalMapModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const objectives = useMemo(() => evaluateObjectivesForAct(state), [state]);
+  const milestones = useMemo(() => computeMilestones(state), [state]);
+  const unlockedMilestones = milestones.filter((m) => m.unlocked).length;
   const actLabel = useMemo(() => getActLabel(state.act), [state.act]);
   const completedCount = objectives.filter((o) => o.completed).length;
   const currentZone = ISLAND_ZONES[getZoneAt(state.player.x, state.player.z)];
@@ -288,6 +292,18 @@ export const JournalMapModal: React.FC<JournalMapModalProps> = ({
             >
               <MapIcon className="h-3.5 w-3.5" />
               Island Map ({exploredPct}%)
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeTab('milestones')}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                initialTab === 'milestones'
+                  ? 'bg-amber-600 text-stone-950'
+                  : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+              }`}
+            >
+              <Trophy className="h-3.5 w-3.5" />
+              Milestones ({unlockedMilestones}/{milestones.length})
             </button>
             <button
               type="button"
@@ -545,6 +561,50 @@ export const JournalMapModal: React.FC<JournalMapModalProps> = ({
                   • Items Gathered: <strong className="text-stone-200">{state.stats.itemsGathered}</strong>{' '}
                   • Crafted: <strong className="text-stone-200">{state.stats.itemsCrafted}</strong>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {initialTab === 'milestones' && (
+            <div className="flex flex-col gap-3">
+              <div className="rounded-lg border border-amber-900/40 bg-stone-900/70 p-3 text-xs text-stone-300">
+                <span className="font-bold text-amber-300">Survivor Record:</span>{' '}
+                Day {state.clock.day} • {Math.round(state.stats.distanceTravelled)} m explored •{' '}
+                {state.stats.itemsGathered} gathered • {state.stats.itemsCrafted} crafted •{' '}
+                {unlockedMilestones}/{milestones.length} Milestones Unlocked
+              </div>
+              <div className="grid gap-2.5 sm:grid-cols-2">
+                {milestones.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`flex items-start gap-2.5 rounded-lg border p-3 ${
+                      m.unlocked
+                        ? 'border-emerald-700/60 bg-emerald-950/20'
+                        : 'border-stone-800/80 bg-stone-900/35 opacity-60'
+                    }`}
+                  >
+                    <Trophy
+                      className={`mt-0.5 h-4 w-4 shrink-0 ${
+                        m.unlocked ? 'text-amber-400' : 'text-stone-600'
+                      }`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-stone-100">{m.title}</span>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[9.5px] font-semibold uppercase ${
+                            m.unlocked
+                              ? 'bg-emerald-500/20 text-emerald-300'
+                              : 'bg-stone-800 text-stone-400'
+                          }`}
+                        >
+                          {m.unlocked ? 'Unlocked' : 'Locked'}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-stone-400">{m.description}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

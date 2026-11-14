@@ -183,6 +183,8 @@ export interface GatherNodeDef {
   scale: number;
 }
 
+export type PlayerStance = 'stand' | 'crouch' | 'prone' | 'sit' | 'sleep';
+
 export interface PlayerContext {
   isMoving: boolean;
   isSprinting: boolean;
@@ -190,6 +192,7 @@ export interface PlayerContext {
   nearFire: boolean;
   sheltered: boolean;
   holdingLitTorch: boolean;
+  stance?: PlayerStance;
 }
 
 export interface SurvivalStats {

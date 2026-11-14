@@ -12,7 +12,16 @@ import {
   ScenePerformanceMetrics,
   SurvivalScene3D,
 } from './scene/SurvivalScene3D.ts';
-import { HUD_TUNING, INVENTORY, NEEDS, SAVE, TIME, WILDLIFE, WORLD } from './survival/config.ts';
+import {
+  HUD_TUNING,
+  INVENTORY,
+  NEEDS,
+  PART5_IMMERSION_TUNING,
+  SAVE,
+  TIME,
+  WILDLIFE,
+  WORLD,
+} from './survival/config.ts';
 import {
   createInitialSurvivalState,
   hitGatherNode,
@@ -87,6 +96,7 @@ import {
   canUnlockGate,
   getZoneAt,
   revealMapAround,
+  sampleIslandHeight,
   tryUnlockGate,
 } from './survival/world.ts';
 import { BoatVoyageModal } from './ui/BoatVoyageModal.tsx';
@@ -136,13 +146,28 @@ export default function App() {
     loadGraphicsQuality(false)
   );
   const [extSettings, setExtSettings] = useState<ExtendedGraphicsSettings>(() =>
-    loadExtendedGraphicsSettings(false)
+    loadExtendedGraphicsSettings()
   );
   const [showPerfOverlay, setShowPerfOverlay] = useState<boolean>(false);
   const [perfMetrics, setPerfMetrics] = useState<ScenePerformanceMetrics | null>(null);
   const [pickupToasts, setPickupToasts] = useState<PickupToastItem[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [showControlsHint, setShowControlsHint] = useState(true);
+  const [sleepFadeAlpha, setSleepFadeAlpha] = useState(0);
+  const [playerYaw, setPlayerYaw] = useState(0);
+  const [oxygen, setOxygen] = useState(100);
+  const [holdInteractProgress, setHoldInteractProgress] = useState(0);
+  const [photoMode, setPhotoMode] = useState(false);
+  const [photoFilter, setPhotoFilter] = useState(0);
+  const [captions, setCaptions] = useState<Array<{ id: string; text: string }>>([]);
+  const [dismissedHints, setDismissedHints] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem('stranded_tutorial_hints_v1');
+      return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+    } catch {
+      return {};
+    }
+  });
 
   const [hoveredTarget, setHoveredTarget] = useState<HoveredTargetInfo | null>(null);
   const [playerContext, setPlayerContext] = useState<PlayerContext>({
@@ -164,13 +189,43 @@ export default function App() {
   const lastGateMsgMsRef = useRef<number>(0);
   const lastBiteToastMsRef = useRef<number>(0);
   const lastActToastRef = useRef<number>(initialLoad.state.act);
+  const prevTideWaterRef = useRef<number>(WORLD.WATER_LEVEL);
+  const lastTideWashHourRef = useRef<number>(-99);
+
+  const dismissTutorialHint = (hintId: string) => {
+    setDismissedHints((prev) => {
+      const next = { ...prev, [hintId]: true };
+      try {
+        localStorage.setItem('stranded_tutorial_hints_v1', JSON.stringify(next));
+      } catch {
+        // Ignore storage quota issues
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!extSettings.closedCaptions) {
+      audio.setCaptionCallback(null);
+      setCaptions([]);
+      return;
+    }
+    audio.setCaptionCallback((text) => {
+      const id = `cap_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      setCaptions((prev) => [...prev.slice(-2), { id, text }]);
+      window.setTimeout(() => {
+        setCaptions((prev) => prev.filter((c) => c.id !== id));
+      }, 3000);
+    });
+    return () => audio.setCaptionCallback(null);
+  }, [extSettings.closedCaptions]);
 
   const pushPickupToast = (text: string, icon?: string) => {
     const id = `toast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     setPickupToasts((prev) => [...prev.slice(-3), { id, text, icon }]);
     window.setTimeout(() => {
       setPickupToasts((prev) => prev.filter((t) => t.id !== id));
-    }, HUD_TUNING.PICKUP_POPUP_DURATION_SEC * 1000);
+    }, HUD_TUNING.PICKUP_TOAST_DURATION_MS);
   };
 
   const showStatus = (msg: string) => {
@@ -229,6 +284,8 @@ export default function App() {
   };
 
   const openPanel = (panel: 'inventory' | 'build' | 'journal' | 'map') => {
+    sceneRef.current?.triggerActionAnimation('map_look');
+    audio.playPaperRustle();
     cancelBuildMode();
     setIsInventoryOpen(panel === 'inventory');
     setIsBuildMenuOpen(panel === 'build');
@@ -367,6 +424,8 @@ export default function App() {
         z: pt.z,
       };
       audio.playBuild();
+      audio.playSparkIgnite();
+      sceneRef.current?.spawnSparkBurst(new THREE.Vector3(pt.x, pt.y, pt.z));
       sceneRef.current?.triggerActionAnimation('place');
       commitAndSave(
         {
@@ -422,8 +481,9 @@ export default function App() {
     if (target.kind === 'clue' && target.clueDef) {
       const res = discoverClue(current, target.clueDef.id);
       audio.playPickup();
+      const clueY = sampleIslandHeight(target.clueDef.x, target.clueDef.z, WORLD.ISLAND_RADIUS);
       sceneRef.current?.triggerPickupAnimation(
-        new THREE.Vector3(target.clueDef.x, target.clueDef.y + 0.35, target.clueDef.z),
+        new THREE.Vector3(target.clueDef.x, clueY + 0.35, target.clueDef.z),
         'waist'
       );
       if (res.newlyFound) {
@@ -444,6 +504,7 @@ export default function App() {
       sceneRef.current?.triggerToolSwing();
       const res = attackWildlife(current, target.creature.id);
       if (res.hit) {
+        sceneRef.current?.notifyToolImpact();
         audio.playChop();
         const cy =
           sceneRef.current?.getTerrainHeight(target.creature.x, target.creature.z) ??
@@ -485,14 +546,24 @@ export default function App() {
       return;
     }
 
-    // 3. Sleep in Shelter (Advance night, heal, bed save)
+    // 3. Sleep in Shelter (Smooth lie-down cinematic -> advance night, heal, bed save -> wake up)
     if (target.kind === 'shelter' && target.shelterId) {
       const shelter = current.shelters.find((s) => s.id === target.shelterId);
       if (!shelter) return;
-      const slept = sleepAtShelter(current, shelter);
-      audio.playCraft();
-      commitAndSave(slept.state, 'bed', 'Slept & Saved');
-      showStatus(slept.message);
+      if (sceneRef.current) {
+        showStatus('Resting in shelter...');
+        sceneRef.current.startSleepCinematic(shelter, () => {
+          const slept = sleepAtShelter(stateRef.current, shelter);
+          audio.playCraft();
+          commitAndSave(slept.state, 'bed', 'Slept & Saved');
+          showStatus(slept.message);
+        });
+      } else {
+        const slept = sleepAtShelter(current, shelter);
+        audio.playCraft();
+        commitAndSave(slept.state, 'bed', 'Slept & Saved');
+        showStatus(slept.message);
+      }
       return;
     }
 
@@ -585,7 +656,7 @@ export default function App() {
     if (target.kind === 'spring') {
       const res = interactFreshwaterSpring(current);
       audio.playDrink();
-      sceneRef.current?.triggerActionAnimation('drink');
+      sceneRef.current?.triggerActionAnimation('drink_spring');
       if (res.gotSick) {
         audio.playHurt();
         triggerDamageFeedback();
@@ -598,8 +669,11 @@ export default function App() {
     // 7. Harvest Gathering Node
     if (target.kind === 'node' && target.nodeDef) {
       const isPickupKind =
-        target.nodeDef.type === 'driftwood' ||
-        target.nodeDef.type === 'flint_pebble' ||
+        target.nodeDef.type === 'loose_stone' ||
+        target.nodeDef.type === 'flint_nodule' ||
+        target.nodeDef.type === 'coconut' ||
+        target.nodeDef.type === 'shell_cluster' ||
+        target.nodeDef.type === 'herb_patch' ||
         target.nodeDef.type === 'berry_bush' ||
         target.nodeDef.type === 'supply_crate';
       if (isPickupKind) {
@@ -621,8 +695,20 @@ export default function App() {
       if (res.sound === 'chop') audio.playChop();
       else if (res.sound === 'mine') audio.playMine();
       else if (res.sound === 'pickup') audio.playPickup();
+      if (res.message.includes('broke!')) {
+        audio.playToolBreak();
+        sceneRef.current?.spawnToolBreakShards();
+      }
 
       if (res.hit) {
+        if (res.sound === 'chop' || res.sound === 'mine') {
+          sceneRef.current?.notifyToolImpact();
+        }
+        sceneRef.current?.recordNodeInteraction(
+          target.nodeDef.id,
+          res.sound,
+          res.depleted
+        );
         sceneRef.current?.spawnHarvestDebris(
           res.sound === 'blocked' ? 'pickup' : res.sound,
           new THREE.Vector3(target.nodeDef.x, target.nodeDef.y + 0.6, target.nodeDef.z)
@@ -657,6 +743,42 @@ export default function App() {
     setExtSettings(scene.getExtendedGraphicsSettings());
     scene.syncState(stateRef.current);
 
+    scene.setStanceBlockedCallback((reason) => showStatus(reason));
+    scene.setActionAudioCallbacks({
+      onSwimStroke: () => audio.playSwimStroke(),
+      onTreeFell: () => audio.playWoodCrack(),
+      onCough: () => audio.playCough(),
+      onShiver: () => audio.playShiverChatter(),
+    });
+    scene.setPart5Callbacks({
+      onPhotoModeChange: (active, filter) => {
+        setPhotoMode(active);
+        setPhotoFilter(filter);
+      },
+      onSplash: (intensity) => audio.playSplash(intensity),
+      onSpatialAmbience: (data) => audio.updateSpatialAndBiomeAmbience(data),
+      onDrowningDamage: (hpLoss) => {
+        audio.playHurt();
+        audio.playHeartbeat(0.95);
+        triggerDamageFeedback();
+        setGameState((prev) => {
+          if (!prev.alive) return prev;
+          const nextHp = Math.max(0, prev.needs.health - hpLoss);
+          const died = nextHp <= 0;
+          if (died) {
+            queueMicrotask(() => {
+              audio.playDefeat();
+              setCauseOfDeath('drowning');
+            });
+          }
+          return {
+            ...prev,
+            alive: !died,
+            needs: { ...prev.needs, health: nextHp },
+          };
+        });
+      },
+    });
     scene.setCallbacks({
       onPrimaryAction: (t) => handlePrimaryActionRef.current(t),
       onOpenCampfireCraft: () => openPanel('inventory'),
@@ -717,9 +839,20 @@ export default function App() {
       const runtime = scene.getPlayerRuntimeSnapshot();
       setHoveredTarget(scene.hoveredTarget ? { ...scene.hoveredTarget } : null);
       setPlayerContext(runtime.context);
+      setPlayerYaw(runtime.yaw);
+      setOxygen((prev) => (Math.abs(prev - runtime.oxygen) >= 1 ? runtime.oxygen : prev));
+      setHoldInteractProgress(runtime.holdInteractProgress);
+      setPhotoMode(runtime.photoMode);
+      setPhotoFilter(runtime.photoFilter);
+      setSleepFadeAlpha((prev) =>
+        Math.abs(prev - runtime.sleepFadeAlpha) > 0.015 ? runtime.sleepFadeAlpha : prev
+      );
       if (showDebug || showPerfOverlay) {
         setFps(runtime.fps);
         setPerfMetrics(scene.getPerformanceMetrics());
+      }
+      if (runtime.photoMode) {
+        return;
       }
 
       if (runtime.bumpedGate) {
@@ -838,9 +971,31 @@ export default function App() {
           nextInventory = torchDmg.inventory;
         }
 
-        // 4. Respawn renewable nodes whose timer elapsed, advance structures & expand Fog-of-War
+        // 4. Respawn renewable nodes whose timer elapsed, tide wash-up, structures & expand Fog-of-War
         const deltaGameHours = Math.max(0, nextClock.totalHours - prev.clock.totalHours);
-        const nextNodes = tickNodeRespawns(prev.nodes, nextClock.totalHours);
+        let nextNodes = tickNodeRespawns(prev.nodes, nextClock.totalHours);
+        const tideThreshold = WORLD.WATER_LEVEL + PART5_IMMERSION_TUNING.TIDE_AMPLITUDE_M * 0.45;
+        if (
+          prevTideWaterRef.current >= tideThreshold &&
+          runtime.waterLevel < tideThreshold &&
+          nextClock.totalHours - lastTideWashHourRef.current >= 5
+        ) {
+          lastTideWashHourRef.current = nextClock.totalHours;
+          let washedUp = 0;
+          const refreshedNodes: typeof nextNodes = { ...nextNodes };
+          for (const [nId, nSt] of Object.entries(refreshedNodes)) {
+            if (nSt.remaining <= 0 && (nId.includes('driftwood') || nId.includes('kelp') || nId.includes('coconut'))) {
+              refreshedNodes[nId] = { remaining: 1, respawnAt: null };
+              washedUp += 1;
+              if (washedUp >= 2) break;
+            }
+          }
+          if (washedUp > 0) {
+            nextNodes = refreshedNodes;
+            queueMicrotask(() => showStatus('Receding tide washed fresh coastal salvage ashore!'));
+          }
+        }
+        prevTideWaterRef.current = runtime.waterLevel;
         const producedStructures = tickStructuresProduction(
           prev.structures ?? [],
           deltaGameHours,
@@ -1008,7 +1163,28 @@ export default function App() {
       }
 
       if (e.code === 'KeyF' && !isUiModalOpen) {
-        handleConsumeSlot(stateRef.current.selectedSlot);
+        const equipped = getEquipped(stateRef.current.inventory, stateRef.current.selectedSlot);
+        const isConsumable =
+          !e.shiftKey &&
+          equipped.def !== null &&
+          (equipped.def.food !== undefined || equipped.def.id === 'medicinal_poultice');
+        if (isConsumable) {
+          handleConsumeSlot(stateRef.current.selectedSlot);
+        } else {
+          const inspecting = sceneRef.current?.toggleInspectItem() ?? false;
+          if (inspecting) {
+            showStatus(`Inspecting ${equipped.def?.name ?? 'Hands'} [F / T]`);
+          }
+        }
+        return;
+      }
+
+      if (e.code === 'KeyT' && !isUiModalOpen) {
+        const equipped = getEquipped(stateRef.current.inventory, stateRef.current.selectedSlot);
+        const inspecting = sceneRef.current?.toggleInspectItem() ?? false;
+        if (inspecting) {
+          showStatus(`Inspecting ${equipped.def?.name ?? 'Hands'} [T]`);
+        }
         return;
       }
 
@@ -1035,10 +1211,16 @@ export default function App() {
       showStatus(res.message);
       return;
     }
-    audio.playDrink();
-    sceneRef.current?.triggerActionAnimation(
-      consumedItemId?.startsWith('water_') ? 'drink' : 'eat'
-    );
+    if (consumedItemId === 'medicinal_poultice') {
+      audio.playBandageWrap();
+      sceneRef.current?.triggerActionAnimation('bandage');
+    } else if (consumedItemId?.startsWith('water_') || consumedItemId === 'coconut') {
+      audio.playDrink();
+      sceneRef.current?.triggerActionAnimation('drink');
+    } else {
+      audio.playEat();
+      sceneRef.current?.triggerActionAnimation('eat');
+    }
     if (res.gotSick) {
       audio.playHurt();
       triggerDamageFeedback();
@@ -1372,6 +1554,37 @@ export default function App() {
     [openForgeId, gameState.structures]
   );
 
+  const activeTutorialHint = useMemo(() => {
+    if (gameState.voyage.phase !== 'docked' || photoMode) return null;
+    if (gameState.stats.itemsGathered === 0 && !dismissedHints['gather_first']) {
+      return {
+        id: 'gather_first',
+        text: 'Tip: Look at branches, stones, or Flight 404 manifests and press [E] or Click to scavenge.',
+      };
+    }
+    if (
+      gameState.stats.itemsGathered >= 2 &&
+      gameState.campfires.length === 0 &&
+      !dismissedHints['craft_fire']
+    ) {
+      return {
+        id: 'craft_fire',
+        text: 'Tip: Open Crafting [Tab/I] or Build [B] to kindle a Stone Campfire before nightfall.',
+      };
+    }
+    if (
+      gameState.stats.itemsCrafted >= 1 &&
+      gameState.campfires.length > 0 &&
+      !dismissedHints['photo_mode']
+    ) {
+      return {
+        id: 'photo_mode',
+        text: 'Tip: Press [P] anytime to enter Photo Mode and capture scenic island snapshots.',
+      };
+    }
+    return null;
+  }, [gameState.stats.itemsGathered, gameState.stats.itemsCrafted, gameState.campfires.length, gameState.voyage.phase, photoMode, dismissedHints]);
+
   return (
     <div
       className="relative h-screen w-screen overflow-hidden bg-stone-950 select-none"
@@ -1413,6 +1626,31 @@ export default function App() {
           showPerfOverlay={showPerfOverlay}
           showDebug={showDebug}
           damageFlash={damageFlash}
+          sleepFadeAlpha={sleepFadeAlpha}
+          playerYaw={playerYaw}
+          oxygen={oxygen}
+          holdInteractProgress={holdInteractProgress}
+          captions={captions}
+          tutorialHint={activeTutorialHint}
+          onDismissTutorialHint={() =>
+            activeTutorialHint && dismissTutorialHint(activeTutorialHint.id)
+          }
+          photoMode={photoMode}
+          photoFilter={photoFilter}
+          onTogglePhotoMode={() => sceneRef.current?.togglePhotoMode()}
+          onChangePhotoFilter={(idx) => sceneRef.current?.setPhotoFilter(idx)}
+          onCapturePhoto={() => {
+            const url = sceneRef.current?.capturePhotoSnapshot();
+            if (!url) {
+              showStatus('Snapshot failed.');
+              return;
+            }
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `stranded_day${gameState.clock.day}_${PART5_IMMERSION_TUNING.PHOTO_FILTER_NAMES[photoFilter] ?? 'Natural'}.png`;
+            a.click();
+            pushPickupToast('Photo Captured!', '📷');
+          }}
           isMuted={isMuted}
           showControlsHint={showControlsHint}
           onToggleControlsHint={() => setShowControlsHint((prev) => !prev)}

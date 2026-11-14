@@ -116,12 +116,51 @@ export const GRAPHICS_PRESETS: Record<GraphicsQuality, GraphicsPreset> = {
   },
 };
 
+export type FpsLimitOption = 30 | 60 | 0;
+export type ViewDistancePreset = 'near' | 'medium' | 'far';
+
+export interface ControlKeybinds {
+  forward: string;
+  back: string;
+  left: string;
+  right: string;
+  jump: string;
+  sprint: string;
+  crouch: string;
+  prone: string;
+  sit: string;
+  interact: string;
+  inspect: string;
+  photoMode: string;
+}
+
+export const DEFAULT_KEYBINDS: ControlKeybinds = {
+  forward: 'KeyW',
+  back: 'KeyS',
+  left: 'KeyA',
+  right: 'KeyD',
+  jump: 'Space',
+  sprint: 'ShiftLeft',
+  crouch: 'KeyC',
+  prone: 'KeyZ',
+  sit: 'KeyX',
+  interact: 'KeyE',
+  inspect: 'KeyF',
+  photoMode: 'KeyP',
+};
+
 export interface ExtendedGraphicsSettings {
   autoQuality: boolean;
-  fpsLimit: 30 | 60 | 0; // 0 = uncapped
+  fpsLimit: FpsLimitOption; // 0 = uncapped
   batterySaver: boolean;
   renderScale: number; // 0.65 - 1.0
-  viewDistance: 'near' | 'medium' | 'far';
+  viewDistance: ViewDistancePreset;
+  fovDeg: number;
+  mouseSensitivity: number;
+  motionBlur: boolean;
+  headBob: boolean;
+  closedCaptions: boolean;
+  keybinds: ControlKeybinds;
 }
 
 const EXTENDED_STORAGE_KEY = 'stranded_graphics_ext_v1';
@@ -133,6 +172,12 @@ export function loadExtendedGraphicsSettings(): ExtendedGraphicsSettings {
     batterySaver: false,
     renderScale: 1.0,
     viewDistance: 'far',
+    fovDeg: 75,
+    mouseSensitivity: 1.0,
+    motionBlur: true,
+    headBob: true,
+    closedCaptions: true,
+    keybinds: { ...DEFAULT_KEYBINDS },
   };
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
@@ -151,6 +196,21 @@ export function loadExtendedGraphicsSettings(): ExtendedGraphicsSettings {
             parsed.viewDistance === 'near' || parsed.viewDistance === 'medium'
               ? parsed.viewDistance
               : 'far',
+          fovDeg:
+            typeof parsed.fovDeg === 'number'
+              ? Math.max(60, Math.min(100, parsed.fovDeg))
+              : 75,
+          mouseSensitivity:
+            typeof parsed.mouseSensitivity === 'number'
+              ? Math.max(0.4, Math.min(2.4, parsed.mouseSensitivity))
+              : 1.0,
+          motionBlur: parsed.motionBlur !== false,
+          headBob: parsed.headBob !== false,
+          closedCaptions: parsed.closedCaptions !== false,
+          keybinds: {
+            ...DEFAULT_KEYBINDS,
+            ...(parsed.keybinds && typeof parsed.keybinds === 'object' ? parsed.keybinds : {}),
+          },
         };
       }
     }

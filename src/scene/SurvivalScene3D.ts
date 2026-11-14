@@ -16,32 +16,38 @@
 import * as THREE from 'three';
 import { CSM } from 'three/addons/csm/CSM.js';
 import {
+  ACTION_TUNING,
   ANIMATION_TUNING,
   COLLISION_TUNING,
   FORGE_TUNING,
   GRAPHICS_TUNING,
+  IK_SWAY_TUNING,
   MOVEMENT_TUNING,
   NEEDS,
+  PART5_IMMERSION_TUNING,
   PERFORMANCE_TUNING,
   SAVE,
+  STANCE_TUNING,
   TEMPERATURE,
   WORLD,
 } from '../survival/config.ts';
-import { getBodyTempStage } from '../survival/needs.ts';
+import { computeAmbientTempC, getBodyTempStage } from '../survival/needs.ts';
 import {
   GATHER_NODE_META,
   generateIslandNodes,
   isNodeAvailable,
 } from '../survival/gathering.ts';
-import { getEquipped } from '../survival/items.ts';
+import { getEquipped, getInitialDurability } from '../survival/items.ts';
 import { STATION_REPAIR_DEFS, STORY_CLUES } from '../survival/quests.ts';
 import {
   BarrierGateDef,
   GatherNodeDef,
+  ItemId,
   PlacedCampfire,
   PlacedShelter,
   PlacedStructure,
   PlayerContext,
+  PlayerStance,
   StationRepairId,
   StoryClueDef,
   StructureType,
@@ -59,6 +65,8 @@ import {
   canUnlockGate,
   clampCameraClearance,
   classifyStepSurface,
+  canEnterStance,
+  getEffectiveWaterLevel,
   ISLAND_GATES,
   resolveWorldMovement,
   sampleIslandHeight,
@@ -88,6 +96,13 @@ import {
   LoadedGLBSet,
   setFlipbookFrame,
 } from './GLBModelBank.ts';
+import { FirstPersonIKRig } from './FirstPersonIK.ts';
+import {
+  EuphoriaOutputs,
+  EuphoriaPhysicsController,
+  FootprintTrailSystem,
+  PlayerFullBodyController,
+} from './PlayerBodyAndFX.ts';
 import {
   BoatSlipwayRecord,
   buildBoatSlipwayDock,
@@ -98,6 +113,8 @@ import {
   VoyageSceneController,
 } from './BoatAndVoyage3D.ts';
 import {
+  ControlKeybinds,
+  DEFAULT_KEYBINDS,
   ExtendedGraphicsSettings,
   GRAPHICS_PRESETS,
   GraphicsQuality,
@@ -106,6 +123,7 @@ import {
   saveExtendedGraphicsSettings,
   saveGraphicsQuality,
 } from './GraphicsConfig.ts';
+import { WorldLifeManager } from './WorldLifeFX.ts';
 import {
   AtmosphereFXRig,
   buildAtmosphereFXRig,
@@ -172,6 +190,8 @@ export interface PerformanceMetrics {
   batterySaver: boolean;
 }
 
+export type ScenePerformanceMetrics = PerformanceMetrics;
+
 interface Particle3D {
   mesh: THREE.Mesh;
   velocity: THREE.Vector3;
@@ -190,7 +210,13 @@ interface CampfireMeshRecord {
   group: THREE.Group;
   flames: THREE.Mesh[];
   light: THREE.PointLight;
-  flipbookSprites?: Array<{ tex: THREE.Texture; fps: number; phase: number; mesh: THREE.Mesh }>;
+  flipbookSprites?: Array<{
+    kind?: 'fire' | 'embers' | 'smoke';
+    tex: THREE.Texture;
+    fps: number;
+    phase: number;
+    mesh: THREE.Mesh;
+  }>;
 }
 
 interface ShelterMeshRecord {
@@ -294,7 +320,7 @@ export class SurvivalScene3D {
   private gateMeshes: Map<string, { def: BarrierGateDef; group: THREE.Group }> = new Map();
   private crashSmokePuffs: THREE.Mesh[] = [];
   private particles: Particle3D[] = [];
-  private forgeSmokeGeom: THREE.DodecahedronGeometry | null = null;
+  private forgeSmokeGeom: THREE.BufferGeometry | null = null;
   private forgeSmokeMat: THREE.MeshLambertMaterial | null = null;
 
   // First-person player state
@@ -321,6 +347,16 @@ export class SurvivalScene3D {
   private csmFrameCounter: number = 0;
   private loadedGLBs: LoadedGLBSet | null = null;
   private fpClipController: FPArmsClipController | null = null;
+  private fpIKRig: FirstPersonIKRig | null = null;
+  private footprintsFx: FootprintTrailSystem | null = null;
+  private fullBodyController: PlayerFullBodyController | null = null;
+  private euphoria: EuphoriaPhysicsController = new EuphoriaPhysicsController();
+  private lastEuphoriaOut: EuphoriaOutputs | null = null;
+  private footRayTargets: THREE.Object3D[] = [];
+  private glbCliffsGroup: THREE.Group | null = null;
+  private currentEquippedItemId: ItemId | 'hammer_build' | null = null;
+  private frameLookYawDelta: number = 0;
+  private frameLookPitchDelta: number = 0;
   private staticGLBColliders: WorldCollider[] = [];
   private playerFootY: number = 0.8;
   private pitch: number = -0.06;
@@ -347,6 +383,103 @@ export class SurvivalScene3D {
   private verticalVel: number = 0;
   private isGrounded: boolean = true;
   private isCrouching: boolean = false;
+  private stance: PlayerStance = 'stand';
+  private crouchBlend: number = 0;
+  private proneBlend: number = 0;
+  private sitBlend: number = 0;
+  private sleepBlend: number = 0;
+  private crouchHoldSec: number = 0;
+  private crouchHoldProneTriggered: boolean = false;
+  private sleepPhase: 'none' | 'lying_down' | 'black_hold' | 'waking_up' = 'none';
+  private sleepPhaseTimer: number = 0;
+  private sleepFadeAlpha: number = 0;
+  private sleepBlackoutFired: boolean = false;
+  private onSleepBlackoutCb: (() => void) | null = null;
+  private onStanceBlocked?: (reason: string) => void;
+  private lastStanceBlockedWarnAt: number = 0;
+  private overheadRaycaster: THREE.Raycaster = new THREE.Raycaster(
+    new THREE.Vector3(),
+    new THREE.Vector3(0, 1, 0),
+    0.2,
+    2.4
+  );
+  // Part 4 Action & World Physics state
+  private actionTimers = {
+    drinkCupped: 0,
+    drinkBottle: 0,
+    eat: 0,
+    bandage: 0,
+    mapLook: 0,
+    heatWipe: 0,
+    cough: 0,
+    craft: 0,
+    place: 0,
+  };
+  private bandagedActive: boolean = false;
+  private periodicActionAccum = {
+    shiver: 0,
+    heatWipe: 0,
+    cough: 0,
+    swimCycle: 0,
+  };
+  private nodeJiggles: Map<
+    string,
+    { timer: number; dur: number; dirX: number; dirZ: number; amp: number }
+  > = new Map();
+  private fallingTrees: {
+    pivot: THREE.Group;
+    tilt: number;
+    angVel: number;
+    dirX: number;
+    dirZ: number;
+    bounced: boolean;
+    restTimer: number;
+    phase: 'falling' | 'resting' | 'fading';
+    fadeTimer: number;
+  }[] = [];
+  private chopStumps: Map<string, THREE.Mesh> = new Map();
+  private chopNotches: Map<string, THREE.Mesh[]> = new Map();
+  private actionAudioCallbacks: {
+    onSwimStroke?: () => void;
+    onTreeFell?: () => void;
+    onCough?: () => void;
+    onShiver?: () => void;
+  } = {};
+  private worldLifeFx: WorldLifeManager | null = null;
+  private currentWaterLevel: number = WORLD.WATER_LEVEL;
+  private oxygen: number = 100;
+  private wasUnderwater: boolean = false;
+  private wasSwimming: boolean = false;
+  private drownDamageAccum: number = 0;
+  private rainDropletLevel: number = 0;
+  private grimeLevel: number = 0.08;
+  private bloodLevel: number = 0;
+  private lastKnownHp: number = 100;
+  private holdInteractProgress: number = 0;
+  private photoMode: boolean = false;
+  private photoFilter: number = 0;
+  private photoSavedCam: { x: number; y: number; z: number; pitch: number; yaw: number } | null =
+    null;
+  private lastSpatialAudioAtMs: number = 0;
+  private part5Callbacks: {
+    onDrowningDamage?: (hpLoss: number) => void;
+    onPhotoModeChange?: (active: boolean, filter: number) => void;
+    onSplash?: (intensity: number) => void;
+    onSpatialAmbience?: (data: {
+      listenerPos: { x: number; y: number; z: number };
+      listenerForward: { x: number; y: number; z: number };
+      surfPos: { x: number; y: number; z: number };
+      springPos: { x: number; y: number; z: number };
+      campfirePos: { x: number; y: number; z: number } | null;
+      inCave: boolean;
+      inForest: boolean;
+      isNight: boolean;
+      rainIntensity: number;
+      nearOcean: boolean;
+      health: number;
+      underwater: boolean;
+    }) => void;
+  } = {};
   private currentEyeHeight: number = MOVEMENT_TUNING.EYE_HEIGHT_STAND_M;
   private peakAirY: number = 0;
   private jumpDip: number = 0;
@@ -489,6 +622,8 @@ export class SurvivalScene3D {
     this.renderer.toneMappingExposure = 0.82;
     this.renderer.shadowMap.enabled = !this.isSoftwareGl && GRAPHICS_PRESETS[this.quality].shadows;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     container.appendChild(this.renderer.domElement);
 
     this.pmremGenerator = new THREE.PMREMGenerator(this.renderer);
@@ -530,12 +665,19 @@ export class SurvivalScene3D {
     this.landmarks = buildInteriorLandmarks(this.scene, (wx, wz) => this.getTerrainHeight(wx, wz));
     this.boatDock = buildBoatSlipwayDock(this.scene, (wx, wz) => this.getTerrainHeight(wx, wz));
     this.voyageDiorama = buildVoyageDiorama(this.scene);
+    this.footprintsFx = new FootprintTrailSystem();
+    this.scene.add(this.footprintsFx.mesh);
     this.initAct1Barriers();
     this.initStoryClues();
     this.initGatherNodes();
     this.rebuildDynamicColliders();
     this.initFishSchools();
     this.wildlife3D = new Wildlife3DManager(this.scene);
+    this.worldLifeFx = new WorldLifeManager((wx, wz) => this.getTerrainHeight(wx, wz));
+    this.scene.add(this.worldLifeFx.root);
+    this.freezeStaticObject(this.terrainMesh);
+    this.freezeStaticObject(this.crashSiteGroup);
+    this.freezeStaticObject(this.springGroup);
     this.initCampfireGhost();
     this.initShelterGhost();
     this.atmosphereFx = buildAtmosphereFXRig(this.scene, (wx, wz) => this.getTerrainHeight(wx, wz));
@@ -575,7 +717,28 @@ export class SurvivalScene3D {
         const preset = GRAPHICS_PRESETS[this.quality];
         const castShad = !this.isSoftwareGl && preset.shadows;
 
-        // 1. Upgrade First-Person Arms & Hands (fp_arms.glb) + 19 Skeletal NLA Clips
+        // 1. Unified Modern Warfare Two-Bone IK Rig (upper_arm -> forearm -> wrist -> hand -> fingers)
+        if (!this.fpIKRig) {
+          this.fpIKRig = new FirstPersonIKRig(models);
+          this.camera.add(this.fpIKRig.root);
+          // Hide legacy procedural viewmodel groups once full IK rig is mounted
+          this.toolRig.visible = false;
+          this.offhandRig.visible = false;
+          this.fpIKRig.setHeldItem(
+            this.buildPreviewType ? 'hammer_build' : this.currentEquippedItemId
+          );
+        }
+
+        // Full survivor body for down-look visibility, Foot IK & cast shadows
+        if (!this.fullBodyController && models.playerBody && this.footprintsFx) {
+          this.fullBodyController = new PlayerFullBodyController(
+            models.playerBody,
+            this.footprintsFx
+          );
+          this.scene.add(this.fullBodyController.group);
+        }
+
+        // Keep fallback arm/tool refs updated for non-IK compatibility if queried
         const leftArm = buildGLBFirstPersonArm(models.fpArms, 'left', 'relaxed');
         this.leftOffhandArmGroup.clear();
         this.leftOffhandArmGroup.add(leftArm);
@@ -820,6 +983,7 @@ export class SurvivalScene3D {
         }
         this.staticGLBColliders = extractedCols;
         this.enableGroupShadows(cliffGroup, castShad, castShad);
+        this.glbCliffsGroup = cliffGroup;
         this.scene.add(cliffGroup);
 
         // Refresh existing placed campfires, shelters, and structures with loaded GLBs
@@ -836,6 +1000,8 @@ export class SurvivalScene3D {
           this.syncShelters(this.latestState.shelters ?? []);
         }
         this.rebuildDynamicColliders();
+        this.freezeStaticObject(this.crashSiteGroup);
+        this.freezeStaticObject(this.glbCliffsGroup);
       })
       .catch(() => {
         // Keep procedural fallback meshes if GLB assets are unavailable
@@ -1014,6 +1180,7 @@ export class SurvivalScene3D {
 
     this.renderer.setPixelRatio(targetPr);
     this.renderer.shadowMap.enabled = effectiveShadows;
+    this.renderer.shadowMap.needsUpdate = effectiveShadows;
     this.sunLight.castShadow = effectiveShadows && !preset.csm;
 
     if (
@@ -1086,7 +1253,12 @@ export class SurvivalScene3D {
         ) {
           return;
         }
-        mesh.castShadow = cast;
+        if (cast && !mesh.geometry.boundingSphere) {
+          mesh.geometry.computeBoundingSphere();
+        }
+        const bsR = mesh.geometry.boundingSphere?.radius ?? 1;
+        const maxS = Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z);
+        mesh.castShadow = cast && bsR * maxS >= 0.55;
         mesh.receiveShadow = receive;
         if (this.csm && !mat.userData.__csmSkip && !this.csm.shaders.has(mat)) {
           this.csm.setupMaterial(mat);
@@ -1126,13 +1298,20 @@ export class SurvivalScene3D {
             parent === this.camera ||
             parent === this.toolRig ||
             parent === this.offhandRig ||
-            parent === this.foliageField?.group
+            parent === this.foliageField?.group ||
+            parent === this.worldLifeFx?.root
           ) {
             return;
           }
           parent = parent.parent;
         }
-        mesh.castShadow = true;
+        if (!mesh.geometry.boundingSphere) {
+          mesh.geometry.computeBoundingSphere();
+        }
+        const bsR = mesh.geometry.boundingSphere?.radius ?? 1;
+        const maxS = Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z);
+        // Tiny ground twigs/stones (<0.55m) only receive shadows to avoid cluttering 3x CSM cascades
+        mesh.castShadow = bsR * maxS >= 0.55;
         mesh.receiveShadow = true;
       }
     });
@@ -1266,6 +1445,10 @@ export class SurvivalScene3D {
 
   public triggerDamageJolt() {
     this.damageJoltTimer = 0.38;
+    this.bloodLevel = Math.min(1, this.bloodLevel + 0.55);
+    this.grimeLevel = Math.min(1, this.grimeLevel + 0.25);
+    this.worldLifeFx?.scatterBirds(this.playerPos);
+    this.euphoria.triggerHit(Math.random() > 0.5 ? 1 : -1, 1.0);
     this.fpClipController?.triggerOneShot('DamageFlinch', 0.38);
   }
 
@@ -1274,6 +1457,108 @@ export class SurvivalScene3D {
     this.swingAnimationTimer = 0;
     this.activeSwingKind = kind ?? this.currentEquippedTool;
     this.fpClipController?.triggerOneShot('ChopSwing', ANIMATION_TUNING.CHOP_SWING_DURATION_SEC);
+  }
+
+  public notifyToolImpact(): void {
+    this.fpIKRig?.notifyImpactHit();
+  }
+
+  public toggleInspectItem(): boolean {
+    return this.fpIKRig?.toggleInspect() ?? false;
+  }
+
+  public setStanceBlockedCallback(cb: (reason: string) => void): void {
+    this.onStanceBlocked = cb;
+  }
+
+  public getStance(): PlayerStance {
+    return this.stance;
+  }
+
+  public getSleepFadeAlpha(): number {
+    return this.sleepFadeAlpha;
+  }
+
+  /** Raycasts straight up from chest/hips to measure headroom height above feet. */
+  private getOverheadClearanceRayM(): number {
+    if (this.footRayTargets.length === 0) return Infinity;
+    this.overheadRaycaster.ray.origin.set(
+      this.playerPos.x,
+      this.playerFootY + 0.25,
+      this.playerPos.z
+    );
+    const hits = this.overheadRaycaster.intersectObjects(this.footRayTargets, true);
+    for (let i = 0; i < hits.length; i++) {
+      const obj = hits[i].object;
+      if (obj.visible) {
+        return hits[i].distance + 0.25;
+      }
+    }
+    return Infinity;
+  }
+
+  private emitStanceBlocked(reason: string): void {
+    const now = performance.now();
+    if (now - this.lastStanceBlockedWarnAt > 1100) {
+      this.lastStanceBlockedWarnAt = now;
+      this.onStanceBlocked?.(reason);
+    }
+  }
+
+  private trySetStance(next: PlayerStance, silent: boolean = false): boolean {
+    if (this.sleepPhase !== 'none' && next !== 'sleep') return false;
+    if (this.isSwimming && next !== 'stand') {
+      this.stance = 'stand';
+      this.isCrouching = false;
+      return false;
+    }
+
+    const shelters = this.latestState?.shelters ?? [];
+    const rayClear = this.getOverheadClearanceRayM();
+    const check = canEnterStance(next, this.playerPos.x, this.playerPos.z, shelters, rayClear);
+    if (!check.allowed) {
+      if (next === 'stand') {
+        const crouchCheck = canEnterStance(
+          'crouch',
+          this.playerPos.x,
+          this.playerPos.z,
+          shelters,
+          rayClear
+        );
+        if (crouchCheck.allowed) {
+          this.stance = 'crouch';
+          this.isCrouching = true;
+          if (!silent) {
+            this.emitStanceBlocked(`${check.reason ?? 'Low overhead'} — crouched instead`);
+          }
+          return true;
+        }
+      }
+      if (!silent) {
+        this.emitStanceBlocked(check.reason ?? 'Not enough headroom here');
+      }
+      return false;
+    }
+
+    this.stance = next;
+    this.isCrouching = next === 'crouch';
+    return true;
+  }
+
+  public startSleepCinematic(shelter: PlacedShelter, onPeakBlackout: () => void): void {
+    if (this.sleepPhase !== 'none') return;
+    // Step smoothly onto the sleeping mat area inside the lean-to shelter
+    this.playerPos.x = shelter.x + Math.sin(shelter.yaw) * 0.22;
+    this.playerPos.z = shelter.z + Math.cos(shelter.yaw) * 0.22;
+    this.velX = 0;
+    this.velZ = 0;
+    this.stance = 'sleep';
+    this.isCrouching = false;
+    this.sleepPhase = 'lying_down';
+    this.sleepPhaseTimer = 0;
+    this.sleepFadeAlpha = 0;
+    this.sleepBlackoutFired = false;
+    this.onSleepBlackoutCb = onPeakBlackout;
   }
 
   public triggerPickupAnimation(
@@ -1312,14 +1597,373 @@ export class SurvivalScene3D {
     }
   }
 
-  public triggerActionAnimation(action: 'drink' | 'eat' | 'craft' | 'place') {
-    const clipMap: Record<'drink' | 'eat' | 'craft' | 'place', FPArmClipName> = {
+  public triggerActionAnimation(
+    action: 'drink' | 'drink_spring' | 'eat' | 'craft' | 'place' | 'bandage' | 'map_look'
+  ) {
+    const clipMap: Record<
+      'drink' | 'drink_spring' | 'eat' | 'craft' | 'place' | 'bandage' | 'map_look',
+      FPArmClipName
+    > = {
       drink: 'Drink',
+      drink_spring: 'Drink',
       eat: 'Eat',
       craft: 'CraftBuild',
       place: 'PlaceObject',
+      bandage: 'CraftBuild',
+      map_look: 'Idle',
     };
     this.fpClipController?.triggerOneShot(clipMap[action], 0.55);
+
+    if (action === 'drink_spring') {
+      this.actionTimers.drinkCupped = ACTION_TUNING.DRINK_SPRING_DURATION_SEC;
+    } else if (action === 'drink') {
+      this.actionTimers.drinkBottle = ACTION_TUNING.DRINK_BOTTLE_DURATION_SEC;
+    } else if (action === 'eat') {
+      this.actionTimers.eat = ACTION_TUNING.EAT_DURATION_SEC;
+    } else if (action === 'bandage') {
+      this.actionTimers.bandage = ACTION_TUNING.BANDAGE_DURATION_SEC;
+      this.bandagedActive = true;
+    } else if (action === 'map_look') {
+      this.actionTimers.mapLook = ACTION_TUNING.MAP_GLANCE_DURATION_SEC;
+    } else if (action === 'craft') {
+      this.actionTimers.craft = ACTION_TUNING.CRAFT_DURATION_SEC;
+    } else if (action === 'place') {
+      this.actionTimers.place = ACTION_TUNING.PLACE_DURATION_SEC;
+    }
+  }
+
+  public setActionAudioCallbacks(callbacks: {
+    onSwimStroke?: () => void;
+    onTreeFell?: () => void;
+    onCough?: () => void;
+    onShiver?: () => void;
+  }): void {
+    this.actionAudioCallbacks = callbacks;
+  }
+
+  public setPart5Callbacks(callbacks: typeof this.part5Callbacks): void {
+    this.part5Callbacks = callbacks;
+  }
+
+  private freezeStaticObject(obj: THREE.Object3D | null | undefined): void {
+    if (!obj) return;
+    obj.traverse((child) => {
+      child.updateMatrix();
+      child.matrixAutoUpdate = false;
+    });
+    obj.updateMatrixWorld(true);
+  }
+
+  private getKeybind(action: keyof ControlKeybinds): string {
+    return this.extSettings.keybinds?.[action] ?? DEFAULT_KEYBINDS[action];
+  }
+
+  private isActionKey(action: keyof ControlKeybinds): boolean {
+    const code = this.getKeybind(action);
+    if (this.keys[code]) return true;
+    if (action === 'forward' && this.keys['ArrowUp']) return true;
+    if (action === 'back' && this.keys['ArrowDown']) return true;
+    if (action === 'left' && this.keys['ArrowLeft']) return true;
+    if (action === 'right' && this.keys['ArrowRight']) return true;
+    if (action === 'crouch' && this.keys['ControlLeft']) return true;
+    if (action === 'sprint' && this.keys['ShiftRight']) return true;
+    return false;
+  }
+
+  public isInPhotoMode(): boolean {
+    return this.photoMode;
+  }
+
+  public setPhotoFilter(filterIdx: number): void {
+    this.photoFilter = Math.max(0, Math.min(PART5_IMMERSION_TUNING.PHOTO_FILTER_NAMES.length - 1, filterIdx));
+    this.part5Callbacks.onPhotoModeChange?.(this.photoMode, this.photoFilter);
+  }
+
+  public exitPhotoMode(): void {
+    if (!this.photoMode) return;
+    this.togglePhotoMode();
+  }
+
+  public togglePhotoMode(): boolean {
+    const inVoy = Boolean(this.latestState?.voyage && this.latestState.voyage.phase !== 'docked');
+    if (inVoy || this.sleepPhase !== 'none') return this.photoMode;
+    this.photoMode = !this.photoMode;
+    if (this.photoMode) {
+      this.photoSavedCam = {
+        x: this.camera.position.x,
+        y: this.camera.position.y,
+        z: this.camera.position.z,
+        pitch: this.pitch,
+        yaw: this.yaw,
+      };
+      this.fullBodyController?.setShowHeadForPhotoMode(true);
+      if (this.fpIKRig) this.fpIKRig.root.visible = false;
+      this.toolRig.visible = false;
+      this.offhandRig.visible = false;
+      this.unlockPointer();
+    } else if (this.photoSavedCam) {
+      this.camera.position.set(this.photoSavedCam.x, this.photoSavedCam.y, this.photoSavedCam.z);
+      this.pitch = this.photoSavedCam.pitch;
+      this.yaw = this.photoSavedCam.yaw;
+      this.targetPitch = this.photoSavedCam.pitch;
+      this.targetYaw = this.photoSavedCam.yaw;
+      this.photoSavedCam = null;
+      this.fullBodyController?.setShowHeadForPhotoMode(false);
+      if (this.fpIKRig) this.fpIKRig.root.visible = true;
+    }
+    this.part5Callbacks.onPhotoModeChange?.(this.photoMode, this.photoFilter);
+    return this.photoMode;
+  }
+
+  public capturePhotoSnapshot(): string | null {
+    try {
+      const usePostFx = this.postFx && !this.isSoftwareGl && this.postFx.hasActivePasses();
+      if (usePostFx && this.postFx) {
+        this.postFx.render();
+      } else {
+        this.renderer.render(this.scene, this.camera);
+      }
+      return this.renderer.domElement.toDataURL('image/png');
+    } catch {
+      return null;
+    }
+  }
+
+  /** Spawns splintered wood & stone shards right in front of the camera when a tool shatters. */
+  public spawnToolBreakShards(): void {
+    const fwd = new THREE.Vector3();
+    this.camera.getWorldDirection(fwd);
+    const origin = this.camera.position.clone().addScaledVector(fwd, 0.55);
+    origin.y -= 0.12;
+    const shardGeom = new THREE.DodecahedronGeometry(0.036, 0);
+    for (let i = 0; i < 12; i++) {
+      const isWood = i % 2 === 0;
+      const mat = new THREE.MeshStandardMaterial({
+        color: isWood ? 0x6b4c35 : 0x78716c,
+        roughness: isWood ? 0.9 : 0.72,
+      });
+      const shard = new THREE.Mesh(shardGeom, mat);
+      shard.scale.set(isWood ? 1.8 : 0.9, 0.65, isWood ? 0.55 : 0.9);
+      shard.position.copy(origin).add(
+        new THREE.Vector3(
+          (Math.random() - 0.5) * 0.14,
+          (Math.random() - 0.5) * 0.1,
+          (Math.random() - 0.5) * 0.14
+        )
+      );
+      this.scene.add(shard);
+      this.particles.push({
+        mesh: shard,
+        velocity: new THREE.Vector3(
+          fwd.x * 1.4 + (Math.random() - 0.5) * 2.8,
+          1.2 + Math.random() * 2.2,
+          fwd.z * 1.4 + (Math.random() - 0.5) * 2.8
+        ),
+        lifetime: 0,
+        maxLifetime: 0.75 + Math.random() * 0.35,
+        gravity: 9.2,
+      });
+    }
+  }
+
+  /** Spawns bright glowing flint/ember ignition sparks when lighting a campfire. */
+  public spawnSparkBurst(worldPos: THREE.Vector3): void {
+    const geom = new THREE.OctahedronGeometry(0.032, 0);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xfdba74 });
+    for (let i = 0; i < 14; i++) {
+      const m = new THREE.Mesh(geom, mat);
+      m.position.set(
+        worldPos.x + (Math.random() - 0.5) * 0.18,
+        worldPos.y + 0.18 + Math.random() * 0.14,
+        worldPos.z + (Math.random() - 0.5) * 0.18
+      );
+      this.scene.add(m);
+      this.particles.push({
+        mesh: m,
+        velocity: new THREE.Vector3(
+          (Math.random() - 0.5) * 2.6,
+          1.6 + Math.random() * 2.8,
+          (Math.random() - 0.5) * 2.6
+        ),
+        lifetime: 0,
+        maxLifetime: 0.42 + Math.random() * 0.35,
+        gravity: 6.5,
+      });
+    }
+  }
+
+  /**
+   * Records physical chop notches, bush/tree spring shake, and toppling trunk physics
+   * when chopping trees, mining rock veins, or shaking/plucking plants.
+   */
+  public recordNodeInteraction(
+    nodeId: string,
+    sound: 'chop' | 'mine' | 'pickup' | 'blocked',
+    depleted: boolean
+  ): void {
+    const rec = this.nodeMeshes.get(nodeId);
+    if (!rec) return;
+
+    // Outward strike direction away from player
+    let dx = rec.def.x - this.playerPos.x;
+    let dz = rec.def.z - this.playerPos.z;
+    const len = Math.hypot(dx, dz);
+    if (len < 0.05) {
+      dx = -Math.sin(this.yaw);
+      dz = -Math.cos(this.yaw);
+    } else {
+      dx /= len;
+      dz /= len;
+    }
+
+    // Spring-damped shake on struck tree, bush, or plant
+    this.grimeLevel = Math.min(1, this.grimeLevel + (sound === 'chop' || sound === 'mine' ? 0.12 : 0.05));
+    this.worldLifeFx?.scatterBirds(this.playerPos);
+    this.nodeJiggles.set(nodeId, {
+      timer: 0,
+      dur: sound === 'chop' ? 0.52 : 0.42,
+      dirX: dx,
+      dirZ: dz,
+      amp: sound === 'chop' ? 0.065 : sound === 'pickup' ? 0.09 : 0.025,
+    });
+
+    const isTree = rec.def.type === 'palm_tree' || rec.def.type === 'resin_tree';
+    if (isTree && sound === 'chop' && !depleted) {
+      // Carve a dark axe notch wedge ring around the trunk at strike height
+      const notches = this.chopNotches.get(nodeId) ?? [];
+      const depth = Math.min(3, notches.length + 1);
+      const notch = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.185 - depth * 0.015, 0.17, 0.11, 10),
+        new THREE.MeshStandardMaterial({ color: 0x3f2718, roughness: 0.92 })
+      );
+      notch.position.set(dx * -0.05, 0.85 + depth * 0.05, dz * -0.05);
+      rec.group.add(notch);
+      notches.push(notch);
+      this.chopNotches.set(nodeId, notches);
+    }
+
+    if (isTree && depleted) {
+      this.actionAudioCallbacks.onTreeFell?.();
+      // Remove notches & leave a freshly chopped wooden stump until respawn
+      const existingNotches = this.chopNotches.get(nodeId);
+      if (existingNotches) {
+        for (const n of existingNotches) {
+          rec.group.remove(n);
+          n.geometry.dispose();
+          (n.material as THREE.Material).dispose();
+        }
+        this.chopNotches.delete(nodeId);
+      }
+
+      if (!this.chopStumps.has(nodeId)) {
+        const stump = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.19, 0.24, 0.56, 10),
+          new THREE.MeshStandardMaterial({ color: 0x7c4f2b, roughness: 0.88 })
+        );
+        stump.position.set(rec.def.x, rec.def.y + 0.26, rec.def.z);
+        stump.castShadow = true;
+        stump.receiveShadow = true;
+        this.scene.add(stump);
+        this.chopStumps.set(nodeId, stump);
+      }
+
+      // Spawn a physics-falling trunk clone that topples under angular gravity, bounces & dissolves
+      const pivot = new THREE.Group();
+      pivot.position.set(rec.def.x, rec.def.y + 0.2, rec.def.z);
+      const clone = rec.group.clone(true);
+      clone.position.set(0, -0.2, 0);
+      clone.rotation.set(0, rec.group.rotation.y, 0);
+      clone.scale.copy(rec.group.scale);
+      clone.visible = true;
+      pivot.add(clone);
+      this.scene.add(pivot);
+      this.fallingTrees.push({
+        pivot,
+        tilt: 0.06,
+        angVel: 0.45,
+        dirX: dx,
+        dirZ: dz,
+        bounced: false,
+        restTimer: 0,
+        phase: 'falling',
+        fadeTimer: 0,
+      });
+    }
+  }
+
+  private updatePart4WorldPhysics(dt: number): void {
+    // 1. Damped tree/bush strike shake
+    for (const [nodeId, jg] of this.nodeJiggles.entries()) {
+      jg.timer += dt;
+      const rec = this.nodeMeshes.get(nodeId);
+      if (rec) {
+        if (jg.timer >= jg.dur) {
+          rec.group.rotation.x = 0;
+          rec.group.rotation.z = 0;
+          this.nodeJiggles.delete(nodeId);
+        } else {
+          const p = jg.timer / jg.dur;
+          const osc = Math.sin(p * Math.PI * 5) * (1 - p) * jg.amp;
+          rec.group.rotation.z = -jg.dirX * osc;
+          rec.group.rotation.x = jg.dirZ * osc;
+        }
+      } else {
+        this.nodeJiggles.delete(nodeId);
+      }
+    }
+
+    // 2. Falling tree angular gravity + bounce + dissolve
+    const remaining: typeof this.fallingTrees = [];
+    for (const ft of this.fallingTrees) {
+      if (ft.phase === 'falling') {
+        const angularAccel = ACTION_TUNING.TREE_FALL_GRAVITY_TORQUE * Math.sin(Math.max(0.14, ft.tilt));
+        ft.angVel += angularAccel * dt;
+        ft.tilt += ft.angVel * dt;
+        const maxTilt = Math.PI * 0.485;
+        if (ft.tilt >= maxTilt) {
+          ft.tilt = maxTilt;
+          if (!ft.bounced && ft.angVel > 1.2) {
+            ft.bounced = true;
+            ft.angVel = -ft.angVel * ACTION_TUNING.TREE_BOUNCE_RESTITUTION;
+            const hitPos = new THREE.Vector3(
+              ft.pivot.position.x + ft.dirX * 3.8,
+              this.getTerrainHeight(
+                ft.pivot.position.x + ft.dirX * 3.8,
+                ft.pivot.position.z + ft.dirZ * 3.8
+              ) + 0.25,
+              ft.pivot.position.z + ft.dirZ * 3.8
+            );
+            this.spawnHarvestDebris('chop', hitPos);
+          } else {
+            ft.angVel = 0;
+            ft.phase = 'resting';
+          }
+        }
+        // Lean cleanly along (dirX, dirZ) axis
+        ft.pivot.quaternion.setFromAxisAngle(
+          new THREE.Vector3(ft.dirZ, 0, -ft.dirX).normalize(),
+          ft.tilt
+        );
+        remaining.push(ft);
+      } else if (ft.phase === 'resting') {
+        ft.restTimer += dt;
+        if (ft.restTimer >= ACTION_TUNING.TREE_FALL_REST_SEC) {
+          ft.phase = 'fading';
+        }
+        remaining.push(ft);
+      } else {
+        ft.fadeTimer += dt;
+        const t = ft.fadeTimer / ACTION_TUNING.TREE_FALL_DISSOLVE_SEC;
+        if (t >= 1) {
+          this.scene.remove(ft.pivot);
+        } else {
+          ft.pivot.scale.setScalar(Math.max(0.02, 1 - t));
+          ft.pivot.position.y -= dt * 0.22;
+          remaining.push(ft);
+        }
+      }
+    }
+    this.fallingTrees = remaining;
   }
 
   private rebuildDynamicColliders() {
@@ -1436,26 +2080,52 @@ export class SurvivalScene3D {
     }
 
     this.dynamicCollidersCache = cols;
+    this.rebuildFootRayTargets();
+  }
+
+  private rebuildFootRayTargets() {
+    const targets: THREE.Object3D[] = [];
+    if (this.crashSiteGroup) targets.push(this.crashSiteGroup);
+    if (this.springGroup) targets.push(this.springGroup);
+    if (this.glbCliffsGroup) targets.push(this.glbCliffsGroup);
+    for (const sh of this.shelters3D.values()) targets.push(sh.group);
+    for (const st of this.structures3D.values()) targets.push(st.group);
+    this.footRayTargets = targets;
   }
 
   public syncState(state: SurvivalState) {
     const prevState = this.latestState;
     this.latestState = state;
 
-    // Update equipped tool visual
+    // Update equipped tool & holdable IK visual
     const equipped = getEquipped(state.inventory, state.selectedSlot);
     const nextKind = equipped.def?.tool?.kind ?? null;
-    if (nextKind !== this.currentEquippedTool) {
+    const nextItemId: ItemId | null = equipped.def?.id ?? null;
+    if (nextKind !== this.currentEquippedTool || nextItemId !== this.currentEquippedItemId) {
       this.equipAnimTimer = 1.0;
       this.fpClipController?.triggerOneShot('SwitchItem', 0.42);
     }
     this.currentEquippedTool = nextKind;
+    this.currentEquippedItemId = nextItemId;
     this.setEquippedToolMesh(nextKind);
+    this.fpIKRig?.setHeldItem(this.buildPreviewType ? 'hammer_build' : nextItemId);
 
     // Sync node visibility against state.nodes and clock.totalHours
     for (const [id, rec] of this.nodeMeshes.entries()) {
       const available = isNodeAvailable(id, state.nodes, state.clock.totalHours);
       rec.group.visible = available;
+      if (available) {
+        const stump = this.chopStumps.get(id);
+        if (stump) {
+          this.scene.remove(stump);
+          stump.geometry.dispose();
+          (stump.material as THREE.Material).dispose();
+          this.chopStumps.delete(id);
+        }
+      }
+    }
+    if (state.needs.health >= ACTION_TUNING.BANDAGE_HEAL_THRESHOLD_HP) {
+      this.bandagedActive = false;
     }
 
     // Sync placed campfires, shelters, Stage 4 base structures, Stage 5 wildlife & station repairs
@@ -1511,6 +2181,13 @@ export class SurvivalScene3D {
     z: number;
     yaw: number;
     context: PlayerContext;
+    stance: PlayerStance;
+    sleepFadeAlpha: number;
+    oxygen: number;
+    holdInteractProgress: number;
+    photoMode: boolean;
+    photoFilter: number;
+    waterLevel: number;
     distanceDelta: number;
     bumpedGate: BarrierGateDef | null;
     fps: number;
@@ -1562,7 +2239,15 @@ export class SurvivalScene3D {
         nearFire: inVoyage ? false : nearFire,
         sheltered: inVoyage ? this.latestState?.voyage.phase === 'stopover' : sheltered,
         holdingLitTorch: inVoyage ? false : holdingLitTorch,
+        stance: inVoyage ? 'stand' : this.stance,
       },
+      stance: inVoyage ? 'stand' : this.stance,
+      sleepFadeAlpha: this.sleepFadeAlpha,
+      oxygen: Math.round(this.oxygen),
+      holdInteractProgress: this.holdInteractProgress,
+      photoMode: this.photoMode,
+      photoFilter: this.photoFilter,
+      waterLevel: this.currentWaterLevel,
       distanceDelta,
       bumpedGate,
       fps: this.fpsValue,
@@ -1580,6 +2265,7 @@ export class SurvivalScene3D {
     }
     this.buildPreviewType = type;
     this.lastGhostValid = null;
+    this.fpIKRig?.setHeldItem(type ? 'hammer_build' : this.currentEquippedItemId);
     if (type) {
       this.buildPreviewYaw = this.yaw;
       const ghost =
@@ -1853,6 +2539,7 @@ export class SurvivalScene3D {
     const crashX = WORLD.WRECK_POS.x;
     const crashZ = WORLD.WRECK_POS.z;
     const crashY = this.getTerrainHeight(crashX, crashZ);
+    crashGroup.name = 'crash_site_group';
     crashGroup.position.set(crashX, crashY, crashZ);
     this.scene.add(crashGroup);
     this.crashSiteGroup = crashGroup;
@@ -1887,9 +2574,11 @@ export class SurvivalScene3D {
       springGroup.add(stone);
     }
 
+    springGroup.name = 'spring_group';
     springGroup.position.set(FRESHWATER_SPRING_POS.x, springY, FRESHWATER_SPRING_POS.z);
     this.scene.add(springGroup);
     this.springGroup = springGroup;
+    this.rebuildFootRayTargets();
   }
 
   private initAct1Barriers() {
@@ -2283,11 +2972,18 @@ export class SurvivalScene3D {
   private buildCampfireMesh(isGhost: boolean = false): {
     group: THREE.Group;
     flames: THREE.Mesh[];
-    flipbookSprites: Array<{ tex: THREE.Texture; fps: number; phase: number; mesh: THREE.Mesh }>;
+    flipbookSprites: Array<{
+      kind?: 'fire' | 'embers' | 'smoke';
+      tex: THREE.Texture;
+      fps: number;
+      phase: number;
+      mesh: THREE.Mesh;
+    }>;
   } {
     const group = new THREE.Group();
     const flames: THREE.Mesh[] = [];
     const flipbookSprites: Array<{
+      kind?: 'fire' | 'embers' | 'smoke';
       tex: THREE.Texture;
       fps: number;
       phase: number;
@@ -2314,7 +3010,7 @@ export class SurvivalScene3D {
         plane.rotation.y = (i * Math.PI) / 2;
         group.add(plane);
         flames.push(plane);
-        flipbookSprites.push({ tex: fireTex, fps: 24, phase: i * 17, mesh: plane });
+        flipbookSprites.push({ kind: 'fire', tex: fireTex, fps: 24, phase: i * 17, mesh: plane });
       }
 
       const emberTex = fb.embers.clone();
@@ -2329,7 +3025,7 @@ export class SurvivalScene3D {
       const emberPlane = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 1.15), emberMat);
       emberPlane.position.set(0, 0.72, 0);
       group.add(emberPlane);
-      flipbookSprites.push({ tex: emberTex, fps: 20, phase: 9, mesh: emberPlane });
+      flipbookSprites.push({ kind: 'embers', tex: emberTex, fps: 20, phase: 9, mesh: emberPlane });
 
       const smokeTex = fb.smoke.clone();
       smokeTex.needsUpdate = true;
@@ -2343,7 +3039,7 @@ export class SurvivalScene3D {
       const smokePlane = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 1.45), smokeMat);
       smokePlane.position.set(0, 1.32, 0);
       group.add(smokePlane);
-      flipbookSprites.push({ tex: smokeTex, fps: 16, phase: 23, mesh: smokePlane });
+      flipbookSprites.push({ kind: 'smoke', tex: smokeTex, fps: 16, phase: 23, mesh: smokePlane });
 
       return { group, flames, flipbookSprites };
     }
@@ -2586,7 +3282,6 @@ export class SurvivalScene3D {
             built.group.add(glbTemplate.clone(true));
             if (built.forgeLight) built.group.add(built.forgeLight);
             if (built.forgeEmberMesh) built.group.add(built.forgeEmberMesh);
-            if (built.indicatorGroup) built.group.add(built.indicatorGroup);
           }
         }
         const terrainY = this.getTerrainHeight(s.x, s.z);
@@ -3493,6 +4188,11 @@ export class SurvivalScene3D {
   // ---------------------------------------------------------------------------
 
   private updatePlayerPhysics(delta: number) {
+    // Update continuous diurnal tidal height
+    const totalHours =
+      ((this.latestState?.clock.day ?? 1) - 1) * 24 + (this.latestState?.clock.hour ?? 9);
+    this.currentWaterLevel = getEffectiveWaterLevel(totalHours);
+
     // Smooth mouse-look interpolation for weight without input lag
     this.yaw = THREE.MathUtils.damp(
       this.yaw,
@@ -3519,6 +4219,54 @@ export class SurvivalScene3D {
       delta
     );
 
+    if (this.photoMode) {
+      _forward.set(-Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
+      _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+      _moveDir.set(0, 0, 0);
+      if (this.isActionKey('forward')) _moveDir.add(_forward);
+      if (this.isActionKey('back')) _moveDir.sub(_forward);
+      if (this.isActionKey('right')) _moveDir.add(_right);
+      if (this.isActionKey('left')) _moveDir.sub(_right);
+      if (this.keys['KeyE'] || this.keys['Space']) _moveDir.y += 1;
+      if (this.keys['KeyQ'] || this.keys['KeyC']) _moveDir.y -= 1;
+      if (_moveDir.lengthSq() > 0) {
+        _moveDir.normalize().multiplyScalar(PART5_IMMERSION_TUNING.PHOTO_FLY_SPEED_MPS * delta);
+        this.camera.position.add(_moveDir);
+      }
+      // Tether Photo Mode free-fly camera within radius around the survivor & keep above terrain
+      const dx = this.camera.position.x - this.playerPos.x;
+      const dy = this.camera.position.y - this.playerPos.y;
+      const dz = this.camera.position.z - this.playerPos.z;
+      const dist = Math.hypot(dx, dy, dz);
+      const maxR = PART5_IMMERSION_TUNING.PHOTO_FLY_MAX_DIST_M;
+      if (dist > maxR) {
+        const s = maxR / dist;
+        this.camera.position.set(
+          this.playerPos.x + dx * s,
+          this.playerPos.y + dy * s,
+          this.playerPos.z + dz * s
+        );
+      }
+      const floorH = this.getTerrainHeight(this.camera.position.x, this.camera.position.z);
+      if (this.camera.position.y < floorH + 0.25) {
+        this.camera.position.y = floorH + 0.25;
+      }
+      this.camera.rotation.order = 'YXZ';
+      this.camera.rotation.y = this.yaw;
+      this.camera.rotation.x = this.pitch;
+      this.camera.rotation.z = 0;
+      const photoFov = this.extSettings.fovDeg || MOVEMENT_TUNING.BASE_FOV_DEG;
+      if (Math.abs(this.camera.fov - photoFov) > 0.05) {
+        this.camera.fov = photoFov;
+        this.camera.updateProjectionMatrix();
+      }
+      this.velX = 0;
+      this.velZ = 0;
+      this.isMoving = false;
+      this.isSprinting = false;
+      return;
+    }
+
     if (this.latestState?.voyage && this.latestState.voyage.phase !== 'docked') {
       const deckLift = this.voyageDiorama ? this.voyageDiorama.boatPivot.position.y * 0.55 : 0;
       const deckRoll = this.voyageDiorama ? this.voyageDiorama.boatPivot.rotation.z * 0.55 : 0;
@@ -3543,39 +4291,126 @@ export class SurvivalScene3D {
     const needs = this.latestState?.needs;
     const tempStage = getBodyTempStage(needs?.temperature ?? 37.0);
     const exhausted = (needs?.stamina ?? 100) < NEEDS.EXHAUSTED_THRESHOLD;
-    this.isCrouching = Boolean(
-      (this.keys['KeyC'] || this.keys['ControlLeft']) && !this.isSwimming
-    );
-    const wantsSprint = Boolean(
-      (this.keys['ShiftLeft'] || this.keys['ShiftRight']) && !this.isCrouching
-    );
-    this.isSprinting = wantsSprint && !exhausted && (needs?.stamina ?? 0) > 2;
+
+    // Sleep cinematic state machine (smooth lie-down -> black fade -> wake-up sit/stand)
+    if (this.sleepPhase !== 'none') {
+      this.sleepPhaseTimer += delta;
+      this.velX = 0;
+      this.velZ = 0;
+      this.isMoving = false;
+      this.isSprinting = false;
+      if (this.sleepPhase === 'lying_down') {
+        const t = Math.min(1, this.sleepPhaseTimer / STANCE_TUNING.SLEEP_LIEDOWN_SEC);
+        this.sleepFadeAlpha = t * t;
+        this.pitch = THREE.MathUtils.damp(this.pitch, -0.35, 6, delta);
+        if (t >= 1) {
+          this.sleepPhase = 'black_hold';
+          this.sleepPhaseTimer = 0;
+          if (!this.sleepBlackoutFired) {
+            this.sleepBlackoutFired = true;
+            this.onSleepBlackoutCb?.();
+          }
+        }
+      } else if (this.sleepPhase === 'black_hold') {
+        this.sleepFadeAlpha = 1;
+        if (this.sleepPhaseTimer >= STANCE_TUNING.SLEEP_BLACK_HOLD_SEC) {
+          this.sleepPhase = 'waking_up';
+          this.sleepPhaseTimer = 0;
+          const standRes = canEnterStance(
+            'stand',
+            this.playerPos.x,
+            this.playerPos.z,
+            this.latestState?.shelters ?? [],
+            this.getOverheadClearanceRayM()
+          );
+          this.stance = standRes.allowed ? 'sit' : 'crouch';
+          this.isCrouching = this.stance === 'crouch';
+        }
+      } else if (this.sleepPhase === 'waking_up') {
+        const t = Math.min(1, this.sleepPhaseTimer / STANCE_TUNING.SLEEP_WAKEUP_SEC);
+        this.sleepFadeAlpha = 1 - t;
+        if (t > 0.65 && this.stance === 'sit') {
+          this.trySetStance('stand', true);
+        }
+        if (t >= 1) {
+          this.sleepPhase = 'none';
+          this.sleepFadeAlpha = 0;
+          this.onSleepBlackoutCb = null;
+        }
+      }
+    }
 
     const terrainY = this.getTerrainHeight(this.playerPos.x, this.playerPos.z);
-    this.isSwimming = terrainY < WORLD.WATER_LEVEL - 0.38;
-    this.isWading = !this.isSwimming && terrainY < WORLD.WATER_LEVEL + 0.14;
+    const prevSwimming = this.isSwimming;
+    this.isSwimming = terrainY < this.currentWaterLevel - 0.38;
+    this.isWading = !this.isSwimming && terrainY < this.currentWaterLevel + 0.14;
+    if (this.isSwimming && !prevSwimming) {
+      this.part5Callbacks.onSplash?.(0.95);
+      this.worldLifeFx?.scatterBirds(this.playerPos);
+    }
+    this.wasSwimming = this.isSwimming;
 
-    let moveSpeed = this.isCrouching
-      ? MOVEMENT_TUNING.CROUCH_SPEED_MPS
-      : this.isSprinting
-        ? MOVEMENT_TUNING.SPRINT_SPEED_MPS
-        : MOVEMENT_TUNING.WALK_SPEED_MPS;
-    if (exhausted) moveSpeed *= MOVEMENT_TUNING.EXHAUSTED_SPEED_MULT;
-    if (this.isSwimming) moveSpeed *= MOVEMENT_TUNING.SWIM_SPEED_MULT;
-    else if (this.isWading) moveSpeed *= MOVEMENT_TUNING.WADE_SPEED_MULT;
-    moveSpeed *= tempStage.speedMult;
+    if (this.isSwimming && this.stance !== 'stand' && this.sleepPhase === 'none') {
+      this.stance = 'stand';
+      this.isCrouching = false;
+    }
+
+    // Hold Crouch threshold transitions smoothly into Prone
+    if (
+      this.sleepPhase === 'none' &&
+      !this.isSwimming &&
+      this.isActionKey('crouch') &&
+      !this.crouchHoldProneTriggered
+    ) {
+      this.crouchHoldSec += delta;
+      if (this.crouchHoldSec >= STANCE_TUNING.HOLD_C_FOR_PRONE_SEC) {
+        this.crouchHoldProneTriggered = true;
+        this.trySetStance(this.stance === 'prone' ? 'crouch' : 'prone');
+      }
+    }
 
     _forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     _right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
     _moveDir.set(0, 0, 0);
-    if (this.keys['KeyW'] || this.keys['ArrowUp']) _moveDir.add(_forward);
-    if (this.keys['KeyS'] || this.keys['ArrowDown']) _moveDir.sub(_forward);
-    if (this.keys['KeyD'] || this.keys['ArrowRight']) _moveDir.add(_right);
-    if (this.keys['KeyA'] || this.keys['ArrowLeft']) _moveDir.sub(_right);
+    if (this.sleepPhase === 'none') {
+      if (this.isActionKey('forward')) _moveDir.add(_forward);
+      if (this.isActionKey('back')) _moveDir.sub(_forward);
+      if (this.isActionKey('right')) _moveDir.add(_right);
+      if (this.isActionKey('left')) _moveDir.sub(_right);
+    }
 
     const hasInput = _moveDir.lengthSq() > 0;
-    if (hasInput) _moveDir.normalize();
+    if (hasInput) {
+      _moveDir.normalize();
+      if (this.stance === 'sit') {
+        this.trySetStance('stand', true);
+      }
+    }
+
+    this.isCrouching = this.stance === 'crouch';
+    const wantsSprint = Boolean(
+      this.isActionKey('sprint') &&
+        this.stance === 'stand' &&
+        this.sleepPhase === 'none'
+    );
+    this.isSprinting = wantsSprint && !exhausted && (needs?.stamina ?? 0) > 2;
+
+    let moveSpeed =
+      this.stance === 'sit' || this.stance === 'sleep'
+        ? 0
+        : this.stance === 'prone'
+          ? STANCE_TUNING.SPEED_PRONE_MPS
+          : this.stance === 'crouch'
+            ? STANCE_TUNING.SPEED_CROUCH_MPS
+            : this.isSprinting
+              ? STANCE_TUNING.SPEED_STAND_SPRINT_MPS
+              : STANCE_TUNING.SPEED_STAND_WALK_MPS;
+    if (exhausted) moveSpeed *= MOVEMENT_TUNING.EXHAUSTED_SPEED_MULT;
+    if (this.isSwimming) moveSpeed *= MOVEMENT_TUNING.SWIM_SPEED_MULT;
+    else if (this.isWading) moveSpeed *= MOVEMENT_TUNING.WADE_SPEED_MULT;
+    moveSpeed *= tempStage.speedMult;
+    moveSpeed *= this.lastEuphoriaOut?.speedMultiplier ?? 1;
 
     const targetVx = hasInput ? _moveDir.x * moveSpeed : 0;
     const targetVz = hasInput ? _moveDir.z * moveSpeed : 0;
@@ -3600,7 +4435,7 @@ export class SurvivalScene3D {
         desiredX,
         desiredZ,
         this.latestState?.unlockedGates ?? [],
-        WORLD.WATER_LEVEL,
+        this.currentWaterLevel,
         this.dynamicCollidersCache
       );
       this.playerPos.x = resolved.x;
@@ -3635,9 +4470,13 @@ export class SurvivalScene3D {
       }
     }
 
-    // Hold [E] continuous smooth pickup of ground items without freezing movement
-    if (this.keys['KeyE'] && !this.isUiBlocked) {
+    // Hold [Interact] continuous smooth pickup & circular ring progress
+    if (this.isActionKey('interact') && !this.isUiBlocked) {
       this.holdERepeatTimer += delta;
+      const canAct = Boolean(this.hoveredTarget && this.hoveredTarget.canInteract);
+      this.holdInteractProgress = canAct
+        ? Math.min(1, this.holdERepeatTimer / ANIMATION_TUNING.HOLD_E_REPEAT_INTERVAL_SEC)
+        : 0;
       if (this.holdERepeatTimer >= ANIMATION_TUNING.HOLD_E_REPEAT_INTERVAL_SEC) {
         this.holdERepeatTimer = 0;
         if (
@@ -3650,6 +4489,7 @@ export class SurvivalScene3D {
       }
     } else {
       this.holdERepeatTimer = 0;
+      this.holdInteractProgress = 0;
     }
 
     // Clamp to outer reef boundary
@@ -3663,15 +4503,23 @@ export class SurvivalScene3D {
     // Smooth locomotion blend weights & athletic strafe roll + dynamic FOV kick (+5 deg when sprinting)
     this.moveBlend = THREE.MathUtils.damp(
       this.moveBlend,
-      this.isMoving ? (this.isSprinting ? 1.0 : this.isCrouching ? 0.38 : 0.65) : 0,
+      this.isMoving
+        ? this.isSprinting
+          ? 1.0
+          : this.stance === 'prone'
+            ? 0.25
+            : this.isCrouching
+              ? 0.38
+              : 0.65
+        : 0,
       10,
       delta
     );
     this.swimBlend = THREE.MathUtils.damp(this.swimBlend, this.isSwimming ? 1 : 0, 8, delta);
 
     const strafeInput =
-      (this.keys['KeyD'] || this.keys['ArrowRight'] ? 1 : 0) -
-      (this.keys['KeyA'] || this.keys['ArrowLeft'] ? 1 : 0);
+      (this.isActionKey('right') ? 1 : 0) -
+      (this.isActionKey('left') ? 1 : 0);
     this.strafeLean = THREE.MathUtils.damp(
       this.strafeLean,
       -strafeInput * (this.isSprinting ? 0.024 : 0.012),
@@ -3679,9 +4527,10 @@ export class SurvivalScene3D {
       delta
     );
 
+    const baseFov = this.extSettings.fovDeg || MOVEMENT_TUNING.BASE_FOV_DEG;
     const targetFov = this.isSwimming
-      ? MOVEMENT_TUNING.BASE_FOV_DEG - 1.5
-      : MOVEMENT_TUNING.BASE_FOV_DEG +
+      ? baseFov - 1.5
+      : baseFov +
         (this.isMoving && this.isSprinting
           ? MOVEMENT_TUNING.SPRINT_FOV_BOOST_DEG
           : this.isMoving
@@ -3698,20 +4547,51 @@ export class SurvivalScene3D {
       this.camera.updateProjectionMatrix();
     }
 
-    // Smooth crouch eye-height transition
-    const targetEyeH = this.isCrouching
-      ? MOVEMENT_TUNING.EYE_HEIGHT_CROUCH_M
-      : MOVEMENT_TUNING.EYE_HEIGHT_STAND_M;
+    // Smooth 5-stance eye height & posture weight transitions (0.3-0.6 s)
+    const targetEyeH =
+      this.stance === 'sleep'
+        ? STANCE_TUNING.EYE_HEIGHT_SLEEP_M
+        : this.stance === 'prone'
+          ? STANCE_TUNING.EYE_HEIGHT_PRONE_M
+          : this.stance === 'sit'
+            ? STANCE_TUNING.EYE_HEIGHT_SIT_M
+            : this.stance === 'crouch'
+              ? STANCE_TUNING.EYE_HEIGHT_CROUCH_M
+              : STANCE_TUNING.EYE_HEIGHT_STAND_M;
     this.currentEyeHeight = THREE.MathUtils.damp(
       this.currentEyeHeight,
       targetEyeH,
-      MOVEMENT_TUNING.CROUCH_LERP_SPEED,
+      STANCE_TUNING.EYE_LERP_SPEED,
+      delta
+    );
+    this.crouchBlend = THREE.MathUtils.damp(
+      this.crouchBlend,
+      this.stance === 'crouch' ? 1 : 0,
+      STANCE_TUNING.STANCE_BLEND_SPEED,
+      delta
+    );
+    this.proneBlend = THREE.MathUtils.damp(
+      this.proneBlend,
+      this.stance === 'prone' ? 1 : 0,
+      STANCE_TUNING.STANCE_BLEND_SPEED,
+      delta
+    );
+    this.sitBlend = THREE.MathUtils.damp(
+      this.sitBlend,
+      this.stance === 'sit' ? 1 : 0,
+      STANCE_TUNING.STANCE_BLEND_SPEED,
+      delta
+    );
+    this.sleepBlend = THREE.MathUtils.damp(
+      this.sleepBlend,
+      this.stance === 'sleep' ? 1 : 0,
+      STANCE_TUNING.STANCE_BLEND_SPEED,
       delta
     );
 
     // Vertical physics: jump anticipation dip, jump arc, gravity & landing dip + dust puff
     const updatedGroundY = this.getTerrainHeight(this.playerPos.x, this.playerPos.z);
-    const targetFootY = Math.max(WORLD.WATER_LEVEL - 0.55, updatedGroundY);
+    const targetFootY = Math.max(this.currentWaterLevel - 0.55, updatedGroundY);
 
     if (!this.isGrounded) {
       this.verticalVel -= MOVEMENT_TUNING.GRAVITY_MPS2 * delta;
@@ -3736,7 +4616,9 @@ export class SurvivalScene3D {
           false
         );
         this.onStepSound?.(landSurf);
-        if (drop > NEEDS.FALL_SAFE_HEIGHT_M && !this.isSwimming) {
+        const hurtByFall = drop > NEEDS.FALL_SAFE_HEIGHT_M && !this.isSwimming;
+        this.euphoria.triggerLanding(drop, hurtByFall);
+        if (hurtByFall) {
           this.onFallImpact?.(drop);
         }
       }
@@ -3757,20 +4639,24 @@ export class SurvivalScene3D {
     );
 
     const airBobScale = this.isGrounded ? 1 : 0.1;
-    const bobAmpY = this.isCrouching
-      ? ANIMATION_TUNING.CROUCH_BOB_AMP_Y
-      : this.isSprinting
-        ? ANIMATION_TUNING.SPRINT_BOB_AMP_Y
-        : ANIMATION_TUNING.WALK_BOB_AMP_Y;
+    const bobAmpY =
+      this.stance === 'prone'
+        ? ANIMATION_TUNING.CROUCH_BOB_AMP_Y * 0.45
+        : this.isCrouching
+          ? ANIMATION_TUNING.CROUCH_BOB_AMP_Y
+          : this.isSprinting
+            ? ANIMATION_TUNING.SPRINT_BOB_AMP_Y
+            : ANIMATION_TUNING.WALK_BOB_AMP_Y;
     const bobAmpX = this.isSprinting
       ? ANIMATION_TUNING.SPRINT_BOB_AMP_X
       : ANIMATION_TUNING.WALK_BOB_AMP_X;
+    const bobEnable = this.extSettings.headBob ? 1 : 0;
     const headBobY =
-      Math.sin(this.walkTimer) * bobAmpY * this.moveBlend * airBobScale -
+      Math.sin(this.walkTimer) * bobAmpY * this.moveBlend * airBobScale * bobEnable -
       this.landingDip -
       this.jumpDip;
     const headBobSide =
-      Math.cos(this.walkTimer * 0.5) * bobAmpX * this.moveBlend * airBobScale;
+      Math.cos(this.walkTimer * 0.5) * bobAmpX * this.moveBlend * airBobScale * bobEnable;
 
     // Exhaustion or cold shiver camera sway (Stage 3 Cold / Stage 4 Hypothermic / Stage 5 Severe)
     const swayAmp = (exhausted ? 0.015 : 0) + (tempStage.shivering ? 0.008 : 0);
@@ -3786,7 +4672,17 @@ export class SurvivalScene3D {
       joltPitch = Math.sin(this.damageJoltTimer * 24) * 0.06 * (this.damageJoltTimer / 0.38);
     }
 
-    this.playerPos.y = this.playerFootY + this.currentEyeHeight;
+    const curHorizSpeed = Math.hypot(this.velX, this.velZ);
+    const euphoriaOut = this.euphoria.update(
+      delta,
+      this.isGrounded,
+      this.verticalVel,
+      curHorizSpeed,
+      needs?.health ?? 100
+    );
+    this.lastEuphoriaOut = euphoriaOut;
+
+    this.playerPos.y = this.playerFootY + this.currentEyeHeight + euphoriaOut.cameraDipOffset;
     const camCleared = clampCameraClearance(
       this.playerPos.x + _right.x * headBobSide,
       this.playerPos.y + headBobY,
@@ -3795,10 +4691,63 @@ export class SurvivalScene3D {
     );
     this.camera.position.set(camCleared.x, camCleared.y, camCleared.z);
 
+    // Underwater submersion & oxygen breath meter
+    const isSubmerged = camCleared.y < this.currentWaterLevel + 0.04;
+    if (isSubmerged) {
+      this.oxygen = Math.max(0, this.oxygen - PART5_IMMERSION_TUNING.OXYGEN_DRAIN_PER_SEC * delta);
+      if (this.oxygen <= 0) {
+        this.drownDamageAccum += delta;
+        if (this.drownDamageAccum >= 1.0) {
+          this.drownDamageAccum -= 1.0;
+          this.part5Callbacks.onDrowningDamage?.(PART5_IMMERSION_TUNING.DROWNING_DAMAGE_PER_SEC);
+        }
+      }
+      this.rainDropletLevel = 1.0;
+    } else {
+      if (this.wasUnderwater) {
+        this.part5Callbacks.onSplash?.(0.6);
+      }
+      this.oxygen = Math.min(100, this.oxygen + PART5_IMMERSION_TUNING.OXYGEN_RECOVER_PER_SEC * delta);
+      this.drownDamageAccum = 0;
+    }
+    this.wasUnderwater = isSubmerged;
+
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = this.yaw;
-    this.camera.rotation.x = this.pitch + joltPitch;
-    this.camera.rotation.z = swayRoll + this.strafeLean;
+    this.camera.rotation.x = this.pitch + joltPitch + euphoriaOut.cameraPitchOffset;
+    this.camera.rotation.z = swayRoll + this.strafeLean + euphoriaOut.cameraRollOffset;
+  }
+
+  /** Fast wall / solid obstacle proximity check (m) along camera forward ray for MW weapon pullback. */
+  private getForwardObstacleDistance(): number {
+    const maxDist = IK_SWAY_TUNING.WALL_AVOID_RAY_DIST;
+    const fx = -Math.sin(this.yaw) * Math.cos(this.pitch);
+    const fz = -Math.cos(this.yaw) * Math.cos(this.pitch);
+    const fy = Math.sin(this.pitch);
+    const gates = this.latestState?.unlockedGates ?? [];
+    for (const d of [0.34, 0.56, maxDist]) {
+      const px = this.playerPos.x + fx * d;
+      const pz = this.playerPos.z + fz * d;
+      const py = this.camera.position.y + fy * d;
+      const res = resolveWorldMovement(
+        this.playerPos.x,
+        this.playerPos.z,
+        px,
+        pz,
+        gates,
+        WORLD.WATER_LEVEL,
+        this.dynamicCollidersCache
+      );
+      const pushSq = (res.x - px) * (res.x - px) + (res.z - pz) * (res.z - pz);
+      if (pushSq > 0.0025) {
+        return Math.max(0.14, d - Math.sqrt(pushSq));
+      }
+      const floorH = this.getTerrainHeight(px, pz);
+      if (floorH > py + 0.05) {
+        return Math.max(0.14, d);
+      }
+    }
+    return maxDist + 0.5;
   }
 
   private updateToolAnimation(delta: number, nowMs: number) {
@@ -3990,6 +4939,165 @@ export class SurvivalScene3D {
       const f = 0.95 + Math.sin(nowMs * 0.011) * 0.08;
       this.lanternGlowMesh.scale.set(1, f, 1);
       this.torchLight.intensity = 2.4 + Math.sin(nowMs * 0.015) * 0.18;
+    }
+
+    if (this.fpIKRig) {
+      const inVoy = Boolean(this.latestState?.voyage && this.latestState.voyage.phase !== 'docked');
+      this.fpIKRig.root.visible = !this.photoMode && !inVoy;
+      // Track wetness, grime, dried blood & tool durability wear
+      const hp = this.latestState?.needs.health ?? 100;
+      if (hp < this.lastKnownHp - 1) {
+        this.bloodLevel = Math.min(1, this.bloodLevel + (this.lastKnownHp - hp) * 0.025);
+      }
+      this.lastKnownHp = hp;
+      const wet01 = Math.max(
+        this.wasUnderwater ? 1 : 0,
+        this.isSwimming ? 0.95 : this.isWading ? 0.55 : 0,
+        (this.latestState?.needs.wetness ?? 0) / 100
+      );
+      const rain = this.latestState?.weather.rain ?? 0;
+      if (this.isSwimming || this.isWading || rain > 0.25) {
+        const washRate = (this.isSwimming ? 0.45 : 0.16) * delta;
+        this.grimeLevel = Math.max(0, this.grimeLevel - washRate);
+        this.bloodLevel = Math.max(0, this.bloodLevel - washRate * 1.15);
+      } else if (this.isMoving) {
+        this.grimeLevel = Math.min(
+          1,
+          this.grimeLevel + (this.stance === 'prone' ? 0.045 : 0.01) * delta
+        );
+      }
+      this.fpIKRig.setSkinConditions(wet01, this.grimeLevel, this.bloodLevel);
+      this.fullBodyController?.setWetAndGrime(wet01, this.grimeLevel);
+      const eq = this.latestState
+        ? getEquipped(this.latestState.inventory, this.latestState.selectedSlot)
+        : { slot: null, def: null };
+      const maxDur = eq.slot ? getInitialDurability(eq.slot.itemId) : undefined;
+      const wearRatio =
+        eq.slot && maxDur && eq.slot.durability !== undefined
+          ? eq.slot.durability / maxDur
+          : 1;
+      this.fpIKRig.setToolDurabilityWear(wearRatio);
+
+      // Tick down Part 4 action blends smoothly
+      const dec = (val: number) => (val > 0 ? Math.max(0, val - delta) : 0);
+      this.actionTimers.drinkCupped = dec(this.actionTimers.drinkCupped);
+      this.actionTimers.drinkBottle = dec(this.actionTimers.drinkBottle);
+      this.actionTimers.eat = dec(this.actionTimers.eat);
+      this.actionTimers.bandage = dec(this.actionTimers.bandage);
+      this.actionTimers.mapLook = dec(this.actionTimers.mapLook);
+      this.actionTimers.heatWipe = dec(this.actionTimers.heatWipe);
+      this.actionTimers.cough = dec(this.actionTimers.cough);
+      this.actionTimers.craft = dec(this.actionTimers.craft);
+      this.actionTimers.place = dec(this.actionTimers.place);
+
+      // Physiological automatic animations + audio cues (cold chatter, hot brow-wipe, sickness cough, swim splash)
+      if (tempStage.shivering) {
+        this.periodicActionAccum.shiver += delta;
+        if (this.periodicActionAccum.shiver >= ACTION_TUNING.SHIVER_SFX_INTERVAL_SEC) {
+          this.periodicActionAccum.shiver = 0;
+          this.actionAudioCallbacks.onShiver?.();
+        }
+      }
+      if ((this.latestState?.needs.sickness ?? 0) > 0) {
+        this.periodicActionAccum.cough += delta;
+        if (this.periodicActionAccum.cough >= ACTION_TUNING.COUGH_INTERVAL_SEC) {
+          this.periodicActionAccum.cough = 0;
+          this.actionTimers.cough = ACTION_TUNING.COUGH_DURATION_SEC;
+          this.actionAudioCallbacks.onCough?.();
+        }
+      }
+      const ambientC = this.latestState
+        ? computeAmbientTempC(this.latestState.clock, this.latestState.weather)
+        : 28;
+      if (ambientC >= ACTION_TUNING.HOT_BROW_WIPE_AMBIENT_C && !this.isSwimming) {
+        this.periodicActionAccum.heatWipe += delta;
+        if (this.periodicActionAccum.heatWipe >= ACTION_TUNING.HEAT_WIPE_INTERVAL_SEC) {
+          this.periodicActionAccum.heatWipe = 0;
+          this.actionTimers.heatWipe = ACTION_TUNING.HEAT_WIPE_DURATION_SEC;
+        }
+      }
+      if (this.isSwimming) {
+        const prevPhase = this.periodicActionAccum.swimCycle;
+        const speedScale = this.isMoving ? 1.15 : 0.45;
+        this.periodicActionAccum.swimCycle +=
+          delta * ACTION_TUNING.SWIM_STROKE_CYCLE_RAD_PER_SEC * speedScale;
+        if (
+          this.isMoving &&
+          Math.floor(prevPhase / (Math.PI * 2)) <
+            Math.floor(this.periodicActionAccum.swimCycle / (Math.PI * 2))
+        ) {
+          this.actionAudioCallbacks.onSwimStroke?.();
+        }
+      }
+
+      const blendCurve = (rem: number, dur: number) =>
+        rem > 0 ? Math.sin((1 - rem / dur) * Math.PI) : 0;
+      const exhaustedAmt = Math.max(
+        0,
+        Math.min(1, 1 - (this.latestState?.needs.stamina ?? 100) / NEEDS.EXHAUSTED_THRESHOLD)
+      );
+
+      const wallDist = this.getForwardObstacleDistance();
+      const swingProg = this.isSwinging ? this.swingAnimationTimer / Math.PI : -1;
+      const pickProg =
+        this.pickupAnimTimer > 0
+          ? 1 - this.pickupAnimTimer / ANIMATION_TUNING.PICKUP_DURATION_SEC
+          : -1;
+      const shiverAmt = tempStage.shivering ? 1 : 0;
+      const sprintBlend = this.isMoving && this.isSprinting ? 1 : 0;
+      this.fpIKRig.update({
+        dt: delta,
+        elapsedSec: tSec,
+        yawDelta: this.frameLookYawDelta,
+        pitchDelta: this.frameLookPitchDelta,
+        moveBlend: this.moveBlend,
+        sprintBlend,
+        crouchBlend: this.crouchBlend,
+        proneBlend: this.proneBlend,
+        sitBlend: this.sitBlend,
+        sleepBlend: this.sleepBlend,
+        swimBlend: this.swimBlend,
+        wallDistance: wallDist,
+        swingProgress: swingProg,
+        swingKind: this.activeSwingKind ?? 'axe',
+        pickupProgress: pickProg,
+        pickupReach: this.pickupReachHeight,
+        activeActionClip: baseClip,
+        shiverAmount: shiverAmt,
+        injuredBandaged:
+          this.bandagedActive ||
+          (this.latestState?.needs.health ?? 100) < 35,
+        cuppedDrinkBlend: blendCurve(
+          this.actionTimers.drinkCupped,
+          ACTION_TUNING.DRINK_SPRING_DURATION_SEC
+        ),
+        drinkBottleBlend: blendCurve(
+          this.actionTimers.drinkBottle,
+          ACTION_TUNING.DRINK_BOTTLE_DURATION_SEC
+        ),
+        biteEatBlend:
+          this.actionTimers.eat > 0
+            ? 1 - this.actionTimers.eat / ACTION_TUNING.EAT_DURATION_SEC
+            : 0,
+        bandageBlend: blendCurve(
+          this.actionTimers.bandage,
+          ACTION_TUNING.BANDAGE_DURATION_SEC
+        ),
+        mapLookBlend: blendCurve(
+          this.actionTimers.mapLook,
+          ACTION_TUNING.MAP_GLANCE_DURATION_SEC
+        ),
+        heatWipeBlend: blendCurve(
+          this.actionTimers.heatWipe,
+          ACTION_TUNING.HEAT_WIPE_DURATION_SEC
+        ),
+        coughBlend: blendCurve(this.actionTimers.cough, ACTION_TUNING.COUGH_DURATION_SEC),
+        exhaustedAmount: exhaustedAmt,
+        swimStrokePhase: this.periodicActionAccum.swimCycle,
+        euphoriaBrace: this.lastEuphoriaOut?.fpArmBrace ?? 0,
+        euphoriaFlail: this.lastEuphoriaOut?.fpArmFlail ?? 0,
+        euphoriaFlailAngle: this.lastEuphoriaOut?.flailAngle ?? 0,
+      });
     }
   }
 
@@ -4205,7 +5313,8 @@ export class SurvivalScene3D {
     let closestFireDistSq = 28 * 28;
     const allowFireShadow = !this.isSoftwareGl && preset.fireShadow && !inVoyage;
     for (const [id, fire] of this.campfires3D.entries()) {
-      const isLit = (fire.data.fuel ?? 1) > 0;
+      const fireData = fire.data as PlacedCampfire & { fuel?: number };
+      const isLit = (fireData.fuel ?? 1) > 0;
       fire.light.intensity = isLit ? 2.15 + Math.sin(tSec * 13 + fire.data.x) * 0.32 : 0;
       for (let i = 0; i < fire.flames.length; i++) {
         const flame = fire.flames[i];
@@ -4251,14 +5360,14 @@ export class SurvivalScene3D {
         rec.forgeSmokeTimer = (rec.forgeSmokeTimer ?? 0) + delta;
         if (rec.forgeSmokeTimer >= FORGE_TUNING.SMOKE_SPAWN_INTERVAL_SEC) {
           rec.forgeSmokeTimer = 0;
-          const smokeTex = this.glbBank?.effects.smoke ? this.glbBank.effects.smoke.clone() : null;
+          const smokeTex = this.loadedGLBs?.flipbooks.smoke ? this.loadedGLBs.flipbooks.smoke.clone() : null;
           if (smokeTex) {
             smokeTex.needsUpdate = true;
             setFlipbookFrame(smokeTex, Math.floor(Math.random() * 16));
           }
-          if (!this.forgeSmokeGeom) {
-            this.forgeSmokeGeom = new THREE.PlaneGeometry(0.45, 0.45);
-          }
+          const forgeGeom =
+            this.forgeSmokeGeom ??
+            (this.forgeSmokeGeom = new THREE.PlaneGeometry(0.45, 0.45));
           const puffMat = new THREE.MeshBasicMaterial({
             color: 0xe5e5e5,
             map: smokeTex ?? undefined,
@@ -4267,7 +5376,7 @@ export class SurvivalScene3D {
             depthWrite: false,
             side: THREE.DoubleSide,
           });
-          const puff = new THREE.Mesh(this.forgeSmokeGeom, puffMat);
+          const puff = new THREE.Mesh(forgeGeom, puffMat);
           puff.position.set(
             rec.data.x + (Math.random() - 0.5) * 0.16,
             rec.data.y + 2.04,
@@ -4305,7 +5414,71 @@ export class SurvivalScene3D {
       puff.scale.setScalar(scale);
     }
 
-    // PostFX environmental mood grading uniforms (Phase 3.5 frost & Phase 4.2 natural vignette)
+    const underwaterNow = this.camera.position.y < this.currentWaterLevel + 0.04;
+    if (underwaterNow) {
+      this.rainDropletLevel = 1.0;
+    } else if (weather.rain > 0.1 && !inVoyage) {
+      this.rainDropletLevel = Math.min(1, Math.max(this.rainDropletLevel, weather.rain));
+    } else {
+      this.rainDropletLevel = Math.max(
+        0,
+        this.rainDropletLevel - delta / PART5_IMMERSION_TUNING.RAIN_DROPLET_DECAY_SEC
+      );
+    }
+
+    const inCaveZone =
+      Math.hypot(this.playerPos.x - WORLD.CAVE_GROTTO_POS.x, this.playerPos.z - WORLD.CAVE_GROTTO_POS.z) < 16;
+    const coldBreath =
+      computeAmbientTempC(this.latestState?.clock ?? { day: 1, hour: 9, totalHours: 9 }, weather) <=
+      PART5_IMMERSION_TUNING.COLD_BREATH_AMBIENT_C;
+    if (this.worldLifeFx) {
+      _camDir.set(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
+      this.worldLifeFx.update(
+        this.photoMode ? 0 : delta,
+        tSec,
+        this.camera.position,
+        _camDir,
+        weather,
+        this.currentWaterLevel,
+        coldBreath,
+        underwaterNow,
+        inVoyage,
+        !this.isSoftwareGl && (preset.mistAndShafts || preset.fireflies)
+      );
+    }
+
+    if (nowMs - this.lastSpatialAudioAtMs >= 140) {
+      this.lastSpatialAudioAtMs = nowMs;
+      _camDir.set(0, 0, -1).applyQuaternion(this.camera.quaternion).normalize();
+      const rad = Math.hypot(this.playerPos.x, this.playerPos.z) || 1;
+      const surfX = (this.playerPos.x / rad) * (this.islandRadius * 0.68);
+      const surfZ = (this.playerPos.z / rad) * (this.islandRadius * 0.68);
+      let closestFirePos: { x: number; y: number; z: number } | null = null;
+      if (closestFireId) {
+        const cf = this.campfires3D.get(closestFireId);
+        if (cf) closestFirePos = { x: cf.data.x, y: cf.data.y + 0.3, z: cf.data.z };
+      }
+      this.part5Callbacks.onSpatialAmbience?.({
+        listenerPos: {
+          x: this.camera.position.x,
+          y: this.camera.position.y,
+          z: this.camera.position.z,
+        },
+        listenerForward: { x: _camDir.x, y: _camDir.y, z: _camDir.z },
+        surfPos: { x: surfX, y: this.currentWaterLevel, z: surfZ },
+        springPos: { x: WORLD.SPRING_POS.x, y: 1.5, z: WORLD.SPRING_POS.z },
+        campfirePos: closestFirePos,
+        inCave: inCaveZone,
+        inForest: !inCaveZone && rad < 52 && this.playerPos.y > 2.2,
+        isNight: nightFactor > 0.45,
+        rainIntensity: weather.rain,
+        nearOcean: rad > 48,
+        health: this.latestState?.needs.health ?? 100,
+        underwater: underwaterNow,
+      });
+    }
+
+    // PostFX environmental mood grading uniforms (Phase 3.5 frost & Part 5 lens effects)
     if (this.postFx && !this.isSoftwareGl) {
       const temp = this.latestState?.needs.temperature ?? 37;
       const tempStage = getBodyTempStage(temp);
@@ -4333,9 +5506,17 @@ export class SurvivalScene3D {
         hurtFactor,
         stormFactor: stormWeight,
         heatShimmerFactor,
+        rainDroplets: this.rainDropletLevel,
+        underwaterFactor: underwaterNow ? 1 : 0,
+        motionBlurStrength: this.extSettings.motionBlur ? 0.85 : 0,
+        motionVelX: this.frameLookYawDelta * 2.4,
+        motionVelY: this.frameLookPitchDelta * 2.4,
+        photoFilter: this.photoMode ? this.photoFilter : 0,
         tSec,
       });
     }
+    this.frameLookYawDelta = 0;
+    this.frameLookPitchDelta = 0;
 
     // Rain particle fall around player (or around the Escape Boat at sea)
     if (this.rainPoints && this.rainMat) {
@@ -4400,12 +5581,57 @@ export class SurvivalScene3D {
   // ---------------------------------------------------------------------------
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (this.isUiBlocked) return;
+    if (this.isUiBlocked && !this.photoMode) return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     this.keys[e.code] = true;
 
-    if (e.code === 'Space') {
+    if (e.code === this.getKeybind('photoMode') && !e.repeat) {
+      this.togglePhotoMode();
+      return;
+    }
+    if (this.photoMode) {
+      if (e.code === 'Escape' && !e.repeat) {
+        this.exitPhotoMode();
+      }
+      return;
+    }
+
+    if (this.sleepPhase !== 'none') return;
+
+    if ((e.code === this.getKeybind('crouch') || e.code === 'ControlLeft') && !e.repeat) {
+      this.crouchHoldSec = 0;
+      this.crouchHoldProneTriggered = false;
+      return;
+    }
+
+    if (e.code === this.getKeybind('prone') && !e.repeat) {
+      if (this.stance === 'prone') {
+        this.trySetStance('stand');
+      } else {
+        this.trySetStance('prone');
+      }
+      return;
+    }
+
+    if (e.code === this.getKeybind('sit') && !e.repeat) {
+      if (this.stance === 'sit') {
+        this.trySetStance('stand');
+      } else {
+        this.trySetStance('sit');
+      }
+      return;
+    }
+
+    if (e.code === this.getKeybind('jump')) {
       e.preventDefault();
+      if (this.stance === 'prone') {
+        this.trySetStance('crouch');
+        return;
+      }
+      if (this.stance === 'sit') {
+        this.trySetStance('stand');
+        return;
+      }
       const stam = this.latestState?.needs.stamina ?? 100;
       if (this.isGrounded && !this.isSwimming && stam >= NEEDS.STAMINA_JUMP) {
         this.verticalVel = MOVEMENT_TUNING.JUMP_VELOCITY_MPS;
@@ -4418,7 +5644,7 @@ export class SurvivalScene3D {
       return;
     }
 
-    if (e.code === 'KeyE') {
+    if (e.code === this.getKeybind('interact')) {
       if (this.hoveredTarget?.kind === 'campfire') {
         this.onOpenCampfireCraft?.();
       } else {
@@ -4429,6 +5655,17 @@ export class SurvivalScene3D {
 
   private onKeyUp = (e: KeyboardEvent) => {
     this.keys[e.code] = false;
+    if (e.code === this.getKeybind('crouch') || e.code === 'ControlLeft') {
+      if (!this.crouchHoldProneTriggered && !this.isUiBlocked && !this.photoMode && this.sleepPhase === 'none') {
+        if (this.stance === 'stand') {
+          this.trySetStance('crouch');
+        } else {
+          this.trySetStance('stand');
+        }
+      }
+      this.crouchHoldSec = 0;
+      this.crouchHoldProneTriggered = false;
+    }
   };
 
   private onCanvasClick = (e: MouseEvent) => {
@@ -4460,15 +5697,18 @@ export class SurvivalScene3D {
   };
 
   private onMouseMove = (e: MouseEvent) => {
-    if (this.isUiBlocked) return;
+    if (this.isUiBlocked && !this.photoMode) return;
+    const sens = this.extSettings.mouseSensitivity || 1.0;
 
     if (this.isPointerLocked) {
       const mx = THREE.MathUtils.clamp(e.movementX, -80, 80);
       const my = THREE.MathUtils.clamp(e.movementY, -80, 80);
-      const dYaw = -mx * 0.0024;
-      const dPitch = -my * 0.0024;
+      const dYaw = -mx * 0.0024 * sens;
+      const dPitch = -my * 0.0024 * sens;
       this.targetYaw += dYaw;
       this.targetPitch = Math.max(-Math.PI / 2.3, Math.min(Math.PI / 2.3, this.targetPitch + dPitch));
+      this.frameLookYawDelta += dYaw;
+      this.frameLookPitchDelta += dPitch;
       this.handLagX = THREE.MathUtils.clamp(
         this.handLagX - dYaw * 0.14,
         -ANIMATION_TUNING.HAND_SWAY_MAX_OFFSET,
@@ -4482,10 +5722,12 @@ export class SurvivalScene3D {
     } else if (this.isDragging) {
       const dx = e.clientX - this.lastMouseX;
       const dy = e.clientY - this.lastMouseY;
-      const dYaw = -dx * 0.0035;
-      const dPitch = -dy * 0.0035;
+      const dYaw = -dx * 0.0035 * sens;
+      const dPitch = -dy * 0.0035 * sens;
       this.targetYaw += dYaw;
       this.targetPitch = Math.max(-Math.PI / 2.3, Math.min(Math.PI / 2.3, this.targetPitch + dPitch));
+      this.frameLookYawDelta += dYaw;
+      this.frameLookPitchDelta += dPitch;
       this.handLagX = THREE.MathUtils.clamp(
         this.handLagX - dYaw * 0.14,
         -ANIMATION_TUNING.HAND_SWAY_MAX_OFFSET,
@@ -4502,7 +5744,7 @@ export class SurvivalScene3D {
   };
 
   private onMouseDown = (e: MouseEvent) => {
-    if (this.isUiBlocked) return;
+    if (this.isUiBlocked && !this.photoMode) return;
     if (e.button === 2 && this.buildPreviewType !== null) {
       e.preventDefault();
       this.onCancelBuild?.();
@@ -4603,7 +5845,7 @@ export class SurvivalScene3D {
       !this.waterReflectionRT ||
       !this.waterMesh ||
       inVoyage ||
-      this.camera.position.y <= WORLD.WATER_LEVEL + 0.08
+      this.camera.position.y <= this.currentWaterLevel + 0.08
     ) {
       if (this.oceanMaterials) {
         this.oceanMaterials.shaderMaterial.uniforms.uHasPlanarReflection.value = 0;
@@ -4620,7 +5862,7 @@ export class SurvivalScene3D {
 
     rCam.position.set(
       this.camera.position.x,
-      2 * WORLD.WATER_LEVEL - this.camera.position.y,
+      2 * this.currentWaterLevel - this.camera.position.y,
       this.camera.position.z
     );
     rCam.rotation.order = 'YXZ';
@@ -4630,14 +5872,21 @@ export class SurvivalScene3D {
     const prevWaterVis = this.waterMesh.visible;
     const prevToolVis = this.toolRig.visible;
     const prevOffhandVis = this.offhandRig.visible;
+    const prevFpIKVis = this.fpIKRig?.root.visible ?? false;
+    const prevBodyVis = this.fullBodyController?.group.visible ?? false;
     const prevRainVis = this.rainPoints?.visible ?? false;
+    const prevGrassVis = this.foliageField?.grassMesh?.visible ?? false;
     const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
     const prevTarget = this.renderer.getRenderTarget();
 
     this.waterMesh.visible = false;
     this.toolRig.visible = false;
     this.offhandRig.visible = false;
+    if (this.fpIKRig) this.fpIKRig.root.visible = false;
+    if (this.fullBodyController) this.fullBodyController.group.visible = false;
     if (this.rainPoints) this.rainPoints.visible = false;
+    if (this.foliageField?.grassMesh) this.foliageField.grassMesh.visible = false;
+    this.worldLifeFx?.setUnderwaterAndScatterVisibility(true);
     this.renderer.shadowMap.autoUpdate = false;
 
     this.renderer.setRenderTarget(this.waterReflectionRT);
@@ -4649,7 +5898,11 @@ export class SurvivalScene3D {
     this.waterMesh.visible = prevWaterVis;
     this.toolRig.visible = prevToolVis;
     this.offhandRig.visible = prevOffhandVis;
+    if (this.fpIKRig) this.fpIKRig.root.visible = prevFpIKVis;
+    if (this.fullBodyController) this.fullBodyController.group.visible = prevBodyVis;
     if (this.rainPoints) this.rainPoints.visible = prevRainVis;
+    if (this.foliageField?.grassMesh) this.foliageField.grassMesh.visible = prevGrassVis;
+    this.worldLifeFx?.setUnderwaterAndScatterVisibility(false);
 
     if (this.oceanMaterials) {
       this.oceanMaterials.shaderMaterial.uniforms.uHasPlanarReflection.value = 1;
@@ -4668,8 +5921,8 @@ export class SurvivalScene3D {
     const now = performance.now();
 
     // Phase 5.1 & 5.2: Frame rate limiter & menu/background throttling
-    let targetFps = this.extSettings.fpsLimit;
-    if (this.isUiBlocked) {
+    let targetFps: number = this.extSettings.fpsLimit;
+    if (this.isUiBlocked && !this.photoMode) {
       targetFps = PERFORMANCE_TUNING.MENU_OPEN_FPS_CAP; // 10 FPS when paused/menu open
     } else if (!this.isWindowFocused) {
       targetFps = Math.min(targetFps || 60, PERFORMANCE_TUNING.BACKGROUND_FPS_CAP);
@@ -4722,43 +5975,82 @@ export class SurvivalScene3D {
       }
     }
 
-    // Animate lagoon fish schools circling near shoreline
-    const fishTime = now * 0.001;
-    for (const school of this.fishSchools) {
-      const ang = fishTime * school.speed + school.phase;
-      const nx = school.centerX + Math.cos(ang) * school.radius;
-      const nz = school.centerZ + Math.sin(ang) * school.radius;
-      school.group.position.set(nx, WORLD.WATER_LEVEL - 0.14, nz);
-      school.group.rotation.y = -ang + (school.speed > 0 ? Math.PI : 0);
-    }
-
     this.updatePlayerPhysics(delta);
-    this.wildlife3D.updateAnimations(delta, (wx, wz) => this.getTerrainHeight(wx, wz));
-    if (this.voyageDiorama && this.latestState) {
-      updateVoyageDiorama(this.voyageDiorama, this.latestState, delta, now);
+    if (!this.photoMode) {
+      // Animate lagoon fish schools circling near shoreline
+      const fishTime = now * 0.001;
+      for (const school of this.fishSchools) {
+        const ang = fishTime * school.speed + school.phase;
+        const nx = school.centerX + Math.cos(ang) * school.radius;
+        const nz = school.centerZ + Math.sin(ang) * school.radius;
+        school.group.position.set(nx, this.currentWaterLevel - 0.14, nz);
+        school.group.rotation.y = -ang + (school.speed > 0 ? Math.PI : 0);
+      }
+      const strafeIn =
+        (this.isActionKey('right') ? 1 : 0) -
+        (this.isActionKey('left') ? 1 : 0);
+      if (this.fullBodyController && this.lastEuphoriaOut) {
+        const inVoy = Boolean(this.latestState?.voyage && this.latestState.voyage.phase !== 'docked');
+        this.fullBodyController.group.visible = !inVoy;
+        if (!inVoy) {
+          this.fullBodyController.update({
+            dt: delta,
+            playerX: this.playerPos.x,
+            playerFootY: this.playerFootY,
+            playerZ: this.playerPos.z,
+            yaw: this.yaw,
+            turnDeltaYaw: this.frameLookYawDelta,
+            moveBlend: this.moveBlend,
+            sprintBlend: this.isMoving && this.isSprinting ? 1 : 0,
+            strafeInput: strafeIn,
+            isGrounded: this.isGrounded,
+            isSwimming: this.isSwimming,
+            crouchBlend: this.crouchBlend,
+            proneBlend: this.proneBlend,
+            sitBlend: this.sitBlend,
+            sleepBlend: this.sleepBlend,
+            walkTimer: this.walkTimer,
+            euphoria: this.lastEuphoriaOut,
+            sampleTerrainHeight: (x, z) => this.getTerrainHeight(x, z),
+            footRayTargets: this.footRayTargets,
+          });
+        }
+      }
+      this.footprintsFx?.update(delta);
+      this.updatePart4WorldPhysics(delta);
+      this.wildlife3D.updateAnimations(delta, (wx, wz) => this.getTerrainHeight(wx, wz));
+      if (this.voyageDiorama && this.latestState) {
+        updateVoyageDiorama(this.voyageDiorama, this.latestState, delta, now);
+      }
+      this.updateHoveredTarget();
+      this.updateToolAnimation(delta, now);
+      this.updateAtmosphereAndLights(now, delta);
+      this.updateParticles(delta);
+    } else {
+      this.updateAtmosphereAndLights(now, 0);
     }
-    this.updateHoveredTarget();
-    this.updateToolAnimation(delta, now);
-    this.updateAtmosphereAndLights(now, delta);
-    this.updateParticles(delta);
 
     if (this.waterMesh) {
       const usingShader =
         !this.isSoftwareGl && GRAPHICS_PRESETS[this.quality].waterShader;
       this.waterMesh.position.y = usingShader
-        ? WORLD.WATER_LEVEL
-        : WORLD.WATER_LEVEL + Math.sin(now * 0.0018) * 0.06;
+        ? this.currentWaterLevel
+        : this.currentWaterLevel + Math.sin(now * 0.0018) * 0.06;
     }
 
     const inVoyage = Boolean(this.latestState?.voyage && this.latestState.voyage.phase !== 'docked');
     this.reflectionFrameCounter += 1;
-    if (this.reflectionFrameCounter % 2 === 0) {
+    if (this.reflectionFrameCounter % 3 === 0) {
       this.updateWaterReflection(inVoyage);
     }
 
     if (this.csm) {
       this.csm.update();
     }
+    this.csmFrameCounter += 1;
+    this.renderer.shadowMap.needsUpdate =
+      this.renderer.shadowMap.enabled &&
+      (this.fpsValue >= 54 || this.csmFrameCounter % 2 === 0);
 
     this.renderer.info.autoReset = false;
     this.renderer.info.reset();
@@ -4810,6 +6102,10 @@ export class SurvivalScene3D {
       }
     }
     this.postFx?.dispose();
+    this.fpIKRig?.dispose();
+    this.fullBodyController?.dispose();
+    this.footprintsFx?.dispose();
+    this.worldLifeFx?.dispose();
     this.foliageField?.dispose();
     this.terrainMatRecord?.material.dispose();
     this.csm?.remove();

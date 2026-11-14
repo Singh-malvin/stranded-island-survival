@@ -449,6 +449,111 @@ export const MOVEMENT_TUNING = {
   GRAVITY_MPS2: 17.5,
 } as const;
 
+export const STANCE_TUNING = {
+  /** Camera eye height above foot level for each stance (metres). */
+  EYE_HEIGHT_STAND_M: 1.65,
+  EYE_HEIGHT_CROUCH_M: 1.08,
+  EYE_HEIGHT_PRONE_M: 0.42,
+  EYE_HEIGHT_SIT_M: 0.85,
+  EYE_HEIGHT_SLEEP_M: 0.34,
+
+  /** Physical standing/capsule headroom required above foot level to occupy a stance (metres). */
+  CLEARANCE_STAND_M: 1.76,
+  CLEARANCE_CROUCH_M: 1.18,
+  CLEARANCE_SIT_M: 1.05,
+  CLEARANCE_PRONE_M: 0.54,
+
+  /** Horizontal movement speeds per stance (m/s). */
+  SPEED_STAND_WALK_MPS: 5.0,
+  SPEED_STAND_SPRINT_MPS: 8.1,
+  SPEED_CROUCH_MPS: 2.95,
+  SPEED_PRONE_MPS: 1.45,
+
+  /** Eye-height / stance blend transition damping speed (0.3-0.6 s smooth transitions). */
+  EYE_LERP_SPEED: 10.5,
+  STANCE_BLEND_SPEED: 8.5,
+
+  /** Hold C duration (sec) to drop from crouch/stand into prone (tapping Z also toggles prone). */
+  HOLD_C_FOR_PRONE_SEC: 0.38,
+
+  /** Resting stamina & fire-warmth multipliers while sitting/prone. */
+  SIT_STAMINA_REGEN_MULT: 1.85,
+  PRONE_STAMINA_REGEN_MULT: 1.25,
+  SIT_NEAR_FIRE_WARMTH_MULT: 1.65,
+  COMFORT_SEAT_RADIUS_M: 3.4,
+
+  /** Noise / detection multipliers per stance (lower = harder for wildlife to spot). */
+  PRONE_NOISE_MULT: 0.35,
+  CROUCH_NOISE_MULT: 0.58,
+  STAND_NOISE_MULT: 1.0,
+
+  /** Cinematic sleep transition durations (sec). */
+  SLEEP_LIEDOWN_SEC: 0.55,
+  SLEEP_BLACK_HOLD_SEC: 0.45,
+  SLEEP_WAKEUP_SEC: 0.60,
+} as const;
+
+export const ACTION_TUNING = {
+  /** Action IK animation durations (sec). */
+  EAT_DURATION_SEC: 0.85,
+  DRINK_BOTTLE_DURATION_SEC: 0.90,
+  DRINK_SPRING_DURATION_SEC: 1.05,
+  BANDAGE_DURATION_SEC: 1.15,
+  MAP_GLANCE_DURATION_SEC: 0.48,
+  HEAT_WIPE_DURATION_SEC: 0.80,
+  COUGH_DURATION_SEC: 0.58,
+  CRAFT_DURATION_SEC: 0.68,
+  PLACE_DURATION_SEC: 0.52,
+
+  /** Felled tree physics & carved stump persistence. */
+  TREE_FALL_GRAVITY_TORQUE: 2.85,
+  TREE_FALL_REST_SEC: 3.0,
+  TREE_FALL_DISSOLVE_SEC: 1.25,
+  TREE_BOUNCE_RESTITUTION: 0.22,
+
+  /** Swim breaststroke stroke period & physiological cadence timers (sec). */
+  SWIM_STROKE_CYCLE_RAD_PER_SEC: 5.2,
+  SHIVER_SFX_INTERVAL_SEC: 7.5,
+  HEAT_WIPE_INTERVAL_SEC: 14.0,
+  COUGH_INTERVAL_SEC: 13.5,
+  HOT_BROW_WIPE_AMBIENT_C: 33.0,
+  BANDAGE_HEAL_THRESHOLD_HP: 88,
+} as const;
+
+export const PART5_IMMERSION_TUNING = {
+  /** Ocean lunar tide oscillation amplitude (metres around WORLD.WATER_LEVEL) & period in game hours. */
+  TIDE_AMPLITUDE_M: 0.42,
+  TIDE_CYCLE_HOURS: 12.4,
+
+  /** Underwater submersion oxygen drain/recovery (0..100%) and drowning health drain per sec. */
+  UNDERWATER_EYE_SUBMERGE_OFFSET_M: 0.08,
+  OXYGEN_MAX: 100,
+  OXYGEN_DRAIN_PER_SEC: 5.5,
+  OXYGEN_RECOVER_PER_SEC: 24.0,
+  DROWNING_DAMAGE_PER_SEC: 9.0,
+
+  /** Skin/clothing grime, blood, and rain/swim wash & sun drying rates (0..1/sec). */
+  DIRT_GAIN_PER_ACTION: 0.085,
+  DIRT_GAIN_PRONE_PER_SEC: 0.045,
+  BLOOD_GAIN_ON_HIT: 0.38,
+  WASH_RATE_SWIM: 0.58,
+  WASH_RATE_WADE: 0.25,
+  WASH_RATE_RAIN: 0.14,
+  DRY_RATE_SUN: 0.045,
+
+  /** Low HP audio lowpass & heartbeat BPM bounds. */
+  LOW_HP_AUDIO_THRESHOLD: 32,
+  HEARTBEAT_MIN_BPM: 68,
+  HEARTBEAT_MAX_BPM: 124,
+
+  /** Cold-breath ambient °C threshold, camera lens droplet dry time, and Photo Mode tuning. */
+  COLD_BREATH_AMBIENT_C: 12.0,
+  RAIN_DROPLET_DECAY_SEC: 3.6,
+  PHOTO_FLY_SPEED_MPS: 9.0,
+  PHOTO_FLY_MAX_DIST_M: 28.0,
+  PHOTO_FILTER_NAMES: ['Natural', 'Warm Sunset', 'Gritty Noir', 'Tropical Vivid'] as const,
+} as const;
+
 export const ANIMATION_TUNING = {
   /** Idle breathing cycle frequency (rad/sec) and vertical amplitude (m). */
   IDLE_BREATH_FREQ: 1.65,
@@ -492,10 +597,15 @@ export const PERFORMANCE_TUNING = {
   FPS_CAP_OPTIONS: [30, 60, 0] as const,
   /** Automatic FPS cap when browser window loses focus. */
   UNFOCUSED_FPS_LIMIT: 30,
+  /** Alias used by scene frame pacing. */
+  BACKGROUND_FPS_CAP: 30,
   /** Automatic FPS cap while game is paused or a full-screen menu is open. */
   PAUSED_MENU_FPS_LIMIT: 10,
+  /** Alias used by scene frame pacing. */
+  MENU_OPEN_FPS_CAP: 10,
   /** Dynamic resolution threshold: lower internal render scale slightly if FPS stays below this. */
   DYNAMIC_RES_LOW_FPS_THRESHOLD: 45,
+  DYNAMIC_RES_RECOVER_FPS: 55,
   DYNAMIC_RES_MIN_SCALE: 0.65,
   /** Maximum devicePixelRatio per quality preset (critical for Retina Mac thermal control). */
   PIXEL_RATIO_CAP_LOW: 1.0,
@@ -564,4 +674,99 @@ export const HUD_TUNING = {
   UI_FADE_DURATION_MS: 200,
   /** Duration (ms) that "+1 Item" pickup popups remain visible near the hotbar. */
   PICKUP_TOAST_DURATION_MS: 1800,
+} as const;
+
+export const IK_SWAY_TUNING = {
+  /** Two-bone IK arm stretch limit when grip point is slightly out of reach (1.045 = 4.5% soft stretch). */
+  MAX_ARM_STRETCH: 1.045,
+  /** Shoulder -> elbow pole targets relative to camera local space (natural downward/outward elbows). */
+  ELBOW_POLE_R: [0.42, -0.58, 0.14] as const,
+  ELBOW_POLE_L: [-0.42, -0.58, 0.14] as const,
+  /** Blend speed (per second) for two-bone IK target smoothing & offhand engage/disengage. */
+  IK_TARGET_BLEND_SPEED: 16.0,
+
+  /** Spring-damper Modern Warfare camera-turn weapon/hand inertia. */
+  INERTIA_STIFFNESS: 145.0,
+  INERTIA_DAMPING: 18.5,
+  INERTIA_INPUT_SCALE_X: 0.0022,
+  INERTIA_INPUT_SCALE_Y: 0.0020,
+  INERTIA_MAX_OFFSET: 0.042,
+  INERTIA_ROT_YAW_MULT: 2.4,
+  INERTIA_ROT_PITCH_MULT: 2.2,
+  INERTIA_ROT_ROLL_MULT: 1.6,
+
+  /** Figure-8 Lissajous walk & sprint movement bob. */
+  WALK_BOB_AMP_X: 0.011,
+  WALK_BOB_AMP_Y: 0.010,
+  WALK_BOB_FREQ: 8.6,
+  SPRINT_BOB_MULT: 1.85,
+  SPRINT_DROP_Y: -0.055,
+  SPRINT_FORWARD_Z: 0.035,
+  SPRINT_TILT_PITCH: -0.18,
+  SPRINT_TILT_YAW: 0.52,
+  SPRINT_TILT_ROLL: 0.24,
+  SPRINT_POSE_BLEND_SPEED: 10.5,
+
+  /** Subtle idle breathing cycle. */
+  BREATH_AMP_Y: 0.0038,
+  BREATH_AMP_PITCH: 0.009,
+  BREATH_FREQ_RAD: 1.75,
+
+  /** Wall / tree / prop avoidance raycast pullback (prevents clipping into nearby solids). */
+  WALL_AVOID_RAY_DIST: 0.72,
+  WALL_PULLBACK_MAX_Z: 0.22,
+  WALL_PULLBACK_MAX_Y: -0.07,
+  WALL_PULLBACK_PITCH: 0.42,
+  WALL_AVOID_BLEND_SPEED: 15.0,
+
+  /** Melee / chop impact stop + recoil kick so tools stop on contact and never clip through trunks. */
+  IMPACT_HITSTOP_SEC: 0.068,
+  IMPACT_RECOIL_BACK_Z: 0.095,
+  IMPACT_RECOIL_PITCH: 0.28,
+  IMPACT_RECOIL_DECAY_SPEED: 14.0,
+
+  /** Inspect item (F on non-consumables or T anytime). */
+  INSPECT_DURATION_SEC: 3.4,
+  INSPECT_POS_OFFSET: [-0.09, 0.05, 0.14] as const,
+  INSPECT_ROT_SPEED: 1.55,
+} as const;
+
+export const BODY_IK_TUNING = {
+  /** Offset full player body backward behind camera eye origin so looking down shows chest, hips & feet cleanly. */
+  BODY_BACK_OFFSET_M: 0.22,
+  /** Height above foot target from which downward Foot IK raycast starts, and max probe length. */
+  FOOT_RAY_HEIGHT_ABOVE: 0.90,
+  FOOT_RAY_MAX_DIST: 1.50,
+  /** Hip lowering multiplier when one foot stands lower on a slope or step (0.5..0.75). */
+  HIP_DROP_SLOPE_FACTOR: 0.62,
+  MAX_HIP_DROP_M: 0.28,
+  HIP_SMOOTH_SPEED: 14.0,
+  /** Speed at which feet plant to terrain normals and step arc height/stride. */
+  FOOT_PLANT_SMOOTH_SPEED: 18.0,
+  FOOT_STRIDE_LENGTH: 0.34,
+  FOOT_STRIDE_LIFT: 0.10,
+
+  /** Torso lean multipliers for turning, lateral strafing, and terrain slope pitch. */
+  LEAN_TURN_SCALE: 0.14,
+  LEAN_STRAFE_SCALE: 0.09,
+  LEAN_SLOPE_SCALE: 0.20,
+
+  /** Sand footprint trail pool & fading. */
+  FOOTPRINT_POOL_SIZE: 72,
+  FOOTPRINT_FADE_SEC: 18.0,
+  FOOTPRINT_SAND_MAX_Y: 3.20,
+  FOOTPRINT_STEP_INTERVAL_DIST: 0.72,
+
+  /** Limp when health is low or after a heavy fall. */
+  LIMP_HEALTH_THRESHOLD: 32,
+  LIMP_FALL_DURATION_SEC: 4.5,
+  LIMP_SPEED_MULT: 0.78,
+  LIMP_DIP_AMPLITUDE: 0.048,
+  LIMP_ROLL_RAD: 0.042,
+
+  /** Simplified GTA Euphoria limb stiffness reactions (stumble, fall flail, landing brace). */
+  EUPHORIA_HIT_STIFFNESS: 0.24,
+  EUPHORIA_FALL_FLAIL_STIFFNESS: 0.34,
+  EUPHORIA_LAND_BRACE_DIST_M: 2.0,
+  EUPHORIA_RECOVERY_RATE: 3.4,
 } as const;

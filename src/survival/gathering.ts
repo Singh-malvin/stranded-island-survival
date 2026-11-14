@@ -472,6 +472,7 @@ export function hitGatherNode(
   depleted: boolean;
   message: string;
   sound: 'chop' | 'mine' | 'pickup' | 'blocked';
+  granted?: { itemId: ItemId; count: number }[];
 } {
   const meta = GATHER_NODE_META[nodeDef.type];
   if (!isNodeAvailable(nodeDef.id, state.nodes, state.clock.totalHours)) {
@@ -539,6 +540,7 @@ export function hitGatherNode(
 
   let itemsGatheredDelta = 0;
   const gainedSummary: string[] = [];
+  const granted: { itemId: ItemId; count: number }[] = [];
 
   if (depleted) {
     for (const y of meta.yields) {
@@ -546,6 +548,9 @@ export function hitGatherNode(
       nextInventory = res.inventory;
       itemsGatheredDelta += res.added;
       gainedSummary.push(`+${res.added} ${ITEM_DEFS[y.itemId].name}`);
+      if (res.added > 0) {
+        granted.push({ itemId: y.itemId, count: res.added });
+      }
     }
   }
 
@@ -582,6 +587,7 @@ export function hitGatherNode(
     depleted,
     message,
     sound: meta.sound,
+    granted,
   };
 }
 

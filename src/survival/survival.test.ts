@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { BASE_BUILDING, BOAT, FORGE_TUNING, NEEDS, NODE_RESPAWN_HOURS, TEMPERATURE, TIME, VOYAGE, WATER, WORLD } from './config.ts';
+import { BASE_BUILDING, BOAT, FORGE_TUNING, NEEDS, NODE_RESPAWN_HOURS, PART5_IMMERSION_TUNING, TEMPERATURE, TIME, VOYAGE, WATER, WORLD } from './config.ts';
 import {
   addItem,
   countItem,
@@ -32,7 +32,10 @@ import {
 } from './gathering.ts';
 import {
   clampCameraClearance,
+  canEnterStance,
   classifyStepSurface,
+  getEffectiveWaterLevel,
+  getOceanTideOffset,
   getZoneAt,
   ISLAND_GATES,
   resolveCollidersPushout,
@@ -40,9 +43,11 @@ import {
   revealMapAround,
   sampleIslandHeight,
   tryUnlockGate,
+  WORLD_LOW_CEILING_ZONES,
 } from './world.ts';
 import {
   computeCurrentAct,
+  computeMilestones,
   discoverClue,
   evaluateAct1Objectives,
   evaluateAct2Objectives,
@@ -87,8 +92,10 @@ import {
   transferChestSlot,
 } from './structures.ts';
 import {
+  DEFAULT_KEYBINDS,
   GRAPHICS_PRESETS,
   isValidGraphicsQuality,
+  loadExtendedGraphicsSettings,
   loadGraphicsQuality,
 } from '../scene/GraphicsConfig.ts';
 
@@ -1184,10 +1191,12 @@ describe('Phase 3 — Freshwater Pond Walkable Slope, Sickness Rules & 5-Stage H
     assert.equal(getBodyTempStage(32.5).stage, 'Severe');
 
     // Cold night storm while wet and swimming pushes target body temp down to 32.0°C
+    const coldAmbient = computeAmbientTempC(
+      { day: 1, hour: 2, totalHours: 14 },
+      { kind: 'storm', rain: 0.9, wind: 0.95 }
+    );
     const coldTarget = computeTargetBodyTempC(
-      14,
-      { kind: 'storm', rain: 0.9, wind: 0.95 },
-      100,
+      coldAmbient,
       {
         isMoving: false,
         isSprinting: false,
@@ -1195,7 +1204,8 @@ describe('Phase 3 — Freshwater Pond Walkable Slope, Sickness Rules & 5-Stage H
         nearFire: false,
         sheltered: false,
         holdingLitTorch: false,
-      }
+      },
+      100
     );
     assert.equal(coldTarget, 32.0);
 
@@ -1232,5 +1242,90 @@ describe('Phase 3 — Freshwater Pond Walkable Slope, Sickness Rules & 5-Stage H
     const warmRes = consumeInventorySlot(coldState, cleanSlot);
     assert.ok(warmRes.state.needs.temperature > 34.5);
     assert.equal(warmRes.state.needs.tempTrend, 'warming');
+  });
+});
+
+describe('Part 3 — Stances, Overhead Clearance & Sit Recovery', () => {
+  it('blocks standing under low wing/shelter roofs while allowing crouch/prone/sit', () => {
+    const wingZone = WORLD_LOW_CEILING_ZONES[0];
+    assert.equal(canEnterStance('stand', wingZone.x, wingZone.z).allowed, false);
+    assert.equal(canEnterStance('prone', wingZone.x, wingZone.z).allowed, true);
+    const campZone = WORLD_LOW_CEILING_ZONES[1];
+    assert.equal(canEnterStance('stand', campZone.x, campZone.z).allowed, false);
+    assert.equal(canEnterStance('crouch', campZone.x, campZone.z).allowed, true);
+
+    const shelterRoof = [{ id: 's1', x: 40, y: 2, z: 40, yaw: 0, builtDay: 1 }];
+    assert.equal(canEnterStance('stand', 40.2, 40.1, shelterRoof).allowed, false);
+    assert.equal(canEnterStance('crouch', 40.2, 40.1, shelterRoof).allowed, true);
+    assert.equal(canEnterStance('stand', 60, 60, shelterRoof).allowed, true);
+  });
+
+  it('accelerates stamina and campfire warmth recovery while sitting', () => {
+    const base = createInitialSurvivalState().needs;
+    const tired = { ...base, stamina: 20, temperature: 35.4 };
+    const ctxStand = {
+      isMoving: false,
+      isSprinting: false,
+      isSwimming: false,
+      nearFire: true,
+      sheltered: false,
+      holdingLitTorch: false,
+      stance: 'stand' as const,
+    };
+    const ctxSit = { ...ctxStand, stance: 'sit' as const };
+    const weather = { kind: 'clear' as const, rain: 0, wind: 0.2 };
+    const afterStand = tickNeeds(tired, 3.0, 14, weather, ctxStand).needs;
+    const afterSit = tickNeeds(tired, 3.0, 14, weather, ctxSit).needs;
+
+    assert.ok(afterSit.stamina > afterStand.stamina);
+    assert.ok(
+      computeTargetBodyTempC(14, ctxSit, 0) > computeTargetBodyTempC(14, ctxStand, 0)
+    );
+  });
+});
+
+describe('Part 5 — Dynamic Tides, Survival Milestones & Control Defaults', () => {
+  it('oscillates ocean tides across a semi-diurnal cycle around base sea level', () => {
+    const samples = Array.from({ length: 24 }, (_, h) => getOceanTideOffset(h));
+    const minOff = Math.min(...samples);
+    const maxOff = Math.max(...samples);
+    assert.ok(minOff < -PART5_IMMERSION_TUNING.TIDE_AMPLITUDE_M * 0.7);
+    assert.ok(maxOff > PART5_IMMERSION_TUNING.TIDE_AMPLITUDE_M * 0.7);
+    assert.equal(getEffectiveWaterLevel(0), WORLD.WATER_LEVEL + getOceanTideOffset(0));
+  });
+
+  it('tracks survival milestones accurately from initial state to advanced progress', () => {
+    const fresh = createInitialSurvivalState('survivor');
+    const freshList = computeMilestones(fresh);
+    assert.ok(freshList.length >= 8);
+    assert.equal(freshList.filter((m) => m.unlocked).length, 0);
+
+    const progressed = {
+      ...fresh,
+      clock: { ...fresh.clock, day: 7 },
+      stats: { ...fresh.stats, distanceTravelled: 1200, itemsGathered: 60, itemsCrafted: 12 },
+      campfires: [{ id: 'cf1', x: 0, y: 1, z: 0, builtDay: 1, fuel: 100 }],
+      cluesFound: [STORY_CLUES[0].id],
+      escapedCity: true,
+    };
+    const unlockedIds = new Set(
+      computeMilestones(progressed)
+        .filter((m) => m.unlocked)
+        .map((m) => m.id)
+    );
+    assert.ok(unlockedIds.has('ms_first_fire'));
+    assert.ok(unlockedIds.has('ms_survivor_3'));
+    assert.ok(unlockedIds.has('ms_crafter'));
+    assert.ok(unlockedIds.has('ms_harbor'));
+  });
+
+  it('provides clean default FOV, sensitivity, captions, and custom keybinds', () => {
+    const ext = loadExtendedGraphicsSettings();
+    assert.equal(ext.fovDeg, 75);
+    assert.equal(ext.mouseSensitivity, 1.0);
+    assert.equal(ext.headBob, true);
+    assert.equal(ext.closedCaptions, true);
+    assert.equal(ext.keybinds.photoMode, DEFAULT_KEYBINDS.photoMode);
+    assert.equal(ext.keybinds.interact, 'KeyE');
   });
 });
