@@ -75,6 +75,7 @@ import {
 } from './Structures3D.ts';
 import { WILDLIFE_SPECS } from '../survival/wildlife.ts';
 import { Wildlife3DManager } from './Wildlife3D.ts';
+import { buildGLBFirstPersonArm, loadAllGameGLBModels } from './GLBModelBank.ts';
 import {
   BoatSlipwayRecord,
   buildBoatSlipwayDock,
@@ -308,8 +309,11 @@ export class SurvivalScene3D {
   // Dual-Arm First-Person Hand & Tool Rig
   private toolRig: THREE.Group;
   private offhandRig: THREE.Group;
+  private leftOffhandArmGroup: THREE.Group;
   private handMesh: THREE.Group;
   private rightToolArm: THREE.Group;
+  private crashSiteGroup: THREE.Group | null = null;
+  private springGroup: THREE.Group | null = null;
   private axeMesh: THREE.Group;
   private macheteMesh: THREE.Group;
   private pickaxeMesh: THREE.Group;
@@ -373,6 +377,7 @@ export class SurvivalScene3D {
     this.camera.add(this.offhandRig);
 
     const leftArm = this.createOffhandArm();
+    this.leftOffhandArmGroup = leftArm;
     this.offhandRig.add(leftArm);
     this.offhandRig.position.set(-0.36, -0.44, -0.58);
     this.offhandRig.rotation.set(0.18, 0.16, 0.08);
@@ -494,8 +499,152 @@ export class SurvivalScene3D {
       this.renderer.compile(this.scene, this.camera);
     }
 
+    this.loadAndApplyBlenderGLBModels();
+
     this.lastTime = performance.now();
     this.tick();
+  }
+
+  private loadAndApplyBlenderGLBModels() {
+    loadAllGameGLBModels()
+      .then((models) => {
+        if (this.isDisposed) return;
+        const preset = GRAPHICS_PRESETS[this.quality];
+        const castShad = !this.isSoftwareGl && preset.shadows;
+
+        // 1. Upgrade First-Person Arms & Hands (fp_arms.glb)
+        this.leftOffhandArmGroup.clear();
+        this.leftOffhandArmGroup.add(buildGLBFirstPersonArm(models.fpArms, 'left', 'relaxed'));
+
+        this.handMesh.clear();
+        this.handMesh.add(buildGLBFirstPersonArm(models.fpArms, 'right', 'relaxed'));
+
+        this.rightToolArm.clear();
+        this.rightToolArm.add(buildGLBFirstPersonArm(models.fpArms, 'right', 'grip'));
+
+        // 2. Upgrade Flight 404 Plane Wreckage (plane_*.glb separate objects)
+        if (this.crashSiteGroup) {
+          for (const child of [...this.crashSiteGroup.children]) {
+            if (!this.crashSmokePuffs.includes(child as THREE.Mesh)) {
+              this.crashSiteGroup.remove(child);
+            }
+          }
+          const fuselage = models.wreckage.fuselage.clone(true);
+          fuselage.position.set(0, -0.08, 0);
+          fuselage.rotation.set(0.05, 1.35, 0.06);
+          this.crashSiteGroup.add(fuselage);
+
+          const wing = models.wreckage.wing.clone(true);
+          wing.position.set(-1.35, -0.04, 2.75);
+          wing.rotation.set(0.08, -0.35, -0.06);
+          this.crashSiteGroup.add(wing);
+
+          const tailFin = models.wreckage.tailFin.clone(true);
+          tailFin.position.set(3.8, -0.06, -2.4);
+          tailFin.rotation.set(0.06, 0.85, -0.16);
+          this.crashSiteGroup.add(tailFin);
+
+          const seat = models.wreckage.seat.clone(true);
+          seat.position.set(2.65, 0.0, 2.05);
+          seat.rotation.set(0.03, 0.62, 0.05);
+          this.crashSiteGroup.add(seat);
+
+          const suitcase = models.wreckage.suitcase.clone(true);
+          suitcase.position.set(1.45, 0.02, 2.8);
+          suitcase.rotation.set(0, -0.52, 0);
+          this.crashSiteGroup.add(suitcase);
+
+          const panelDebris = models.wreckage.panelDebris.clone(true);
+          panelDebris.position.set(-2.4, 0.02, -2.25);
+          panelDebris.rotation.set(0.04, 0.25, 0.05);
+          this.crashSiteGroup.add(panelDebris);
+
+          this.enableGroupShadows(this.crashSiteGroup, castShad, castShad);
+        }
+
+        // 3. Upgrade Palm Trees (with LOD1s), Boulders, Loose Stones & Crash Debris Nodes
+        for (const entry of this.nodeMeshes.values()) {
+          const { def, group } = entry;
+          if (def.type === 'palm_tree') {
+            group.clear();
+            const vIdx = Math.abs(Math.round(def.x * 7 + def.z * 13)) % 3;
+            const lod = new THREE.LOD();
+            const hi = models.palmTrees[vIdx].clone(true);
+            const lo = models.palmTreeLods[vIdx].clone(true);
+            lod.addLevel(hi, 0);
+            lod.addLevel(lo, 86);
+            group.add(lod);
+            this.enableGroupShadows(group, castShad, castShad);
+          } else if (def.type === 'boulder') {
+            group.clear();
+            const main = models.rocks.large.clone(true);
+            main.scale.setScalar(0.88);
+            group.add(main);
+            const side = models.rocks.medium.clone(true);
+            side.position.set(0.95, 0, 0.45);
+            side.rotation.y = 1.4;
+            group.add(side);
+            this.enableGroupShadows(group, castShad, castShad);
+          } else if (def.type === 'loose_stone') {
+            group.clear();
+            for (let i = 0; i < 3; i++) {
+              const st = models.rocks.small.clone(true);
+              st.scale.setScalar(0.82 - i * 0.12);
+              st.position.set((i - 1) * 0.28, 0, (i % 2) * 0.18);
+              st.rotation.y = i * 2.1;
+              group.add(st);
+            }
+            this.enableGroupShadows(group, castShad, castShad);
+          } else if (def.type === 'crash_debris') {
+            group.clear();
+            const p = models.wreckage.panelDebris.clone(true);
+            p.scale.setScalar(0.68);
+            group.add(p);
+            const sc = models.wreckage.suitcase.clone(true);
+            sc.position.set(0.58, 0, 0.36);
+            sc.rotation.y = 0.85;
+            group.add(sc);
+            this.enableGroupShadows(group, castShad, castShad);
+          }
+        }
+
+        // 4. Upgrade Freshwater Spring Rim Stones & Add Coastal Cliff Outcrops
+        if (this.springGroup) {
+          const keepPool = this.springGroup.children[0];
+          this.springGroup.clear();
+          if (keepPool) this.springGroup.add(keepPool);
+          for (let i = 0; i < 10; i++) {
+            const ang = (i / 10) * Math.PI * 2;
+            const rMesh = (i % 2 === 0 ? models.rocks.flat : models.rocks.medium).clone(true);
+            rMesh.scale.setScalar(i % 2 === 0 ? 0.55 : 0.65);
+            rMesh.position.set(Math.cos(ang) * 2.35, 0.0, Math.sin(ang) * 2.35);
+            rMesh.rotation.y = ang + 0.5;
+            this.springGroup.add(rMesh);
+          }
+          this.enableGroupShadows(this.springGroup, castShad, castShad);
+        }
+
+        const cliffSpots: Array<[number, number, number, number]> = [
+          [-26, 36, 0.4, 1.05],
+          [28, 38, -0.5, 1.15],
+          [-38, -14, 1.2, 1.2],
+          [36, -18, -1.1, 1.1],
+        ];
+        const cliffGroup = new THREE.Group();
+        for (const [cx, cz, rotY, sc] of cliffSpots) {
+          const cy = this.getTerrainHeight(cx, cz);
+          const cliff = models.rocks.cliff.clone(true);
+          cliff.position.set(cx, Math.max(0, cy - 0.25), cz);
+          cliff.rotation.y = rotY;
+          cliff.scale.setScalar(sc);
+          cliffGroup.add(cliff);
+        }
+        this.enableGroupShadows(cliffGroup, castShad, castShad);
+        this.scene.add(cliffGroup);
+      })
+      .catch(() => {
+        // Keep procedural fallback meshes if GLB assets are unavailable
+      });
   }
 
   public getQuality(): GraphicsQuality {
@@ -1366,6 +1515,7 @@ export class SurvivalScene3D {
     const crashY = this.getTerrainHeight(crashX, crashZ);
     crashGroup.position.set(crashX, crashY, crashZ);
     this.scene.add(crashGroup);
+    this.crashSiteGroup = crashGroup;
 
     // 2. Freshwater Spring Pool (WORLD.SPRING_POS)
     const springY = this.getTerrainHeight(FRESHWATER_SPRING_POS.x, FRESHWATER_SPRING_POS.z);
@@ -1399,6 +1549,7 @@ export class SurvivalScene3D {
 
     springGroup.position.set(FRESHWATER_SPRING_POS.x, springY, FRESHWATER_SPRING_POS.z);
     this.scene.add(springGroup);
+    this.springGroup = springGroup;
   }
 
   private initAct1Barriers() {
