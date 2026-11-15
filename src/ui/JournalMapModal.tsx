@@ -11,10 +11,12 @@ import {
   Trophy,
   X,
 } from 'lucide-react';
-import { SAVE, WORLD } from '../survival/config.ts';
+import { POWER_TUNING, PRISON_TUNING, SAVE, WORLD } from '../survival/config.ts';
+import { getDanielSharedLore, getDanielTrustLabel } from '../survival/companion.ts';
 import {
   computeMilestones,
   evaluateObjectivesForAct,
+  evaluateOpenGoals,
   getActLabel,
   STATION_REPAIR_DEFS,
   STORY_CLUES,
@@ -36,6 +38,7 @@ interface JournalMapModalProps {
   initialTab: JournalTab;
   state: SurvivalState;
   onChangeTab: (tab: JournalTab) => void;
+  onPingMapTarget?: (x: number, z: number) => void;
   onClose: () => void;
 }
 
@@ -44,15 +47,17 @@ export const JournalMapModal: React.FC<JournalMapModalProps> = ({
   initialTab,
   state,
   onChangeTab,
+  onPingMapTarget,
   onClose,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  const openGoals = useMemo(() => evaluateOpenGoals(state), [state]);
   const objectives = useMemo(() => evaluateObjectivesForAct(state), [state]);
   const milestones = useMemo(() => computeMilestones(state), [state]);
   const unlockedMilestones = milestones.filter((m) => m.unlocked).length;
   const actLabel = useMemo(() => getActLabel(state.act), [state.act]);
-  const completedCount = objectives.filter((o) => o.completed).length;
+  const completedCount = openGoals.filter((o) => o.completed).length;
   const currentZone = ISLAND_ZONES[getZoneAt(state.player.x, state.player.z)];
 
   // Calculate approximate land cell count across the expanded 260m island
@@ -212,6 +217,58 @@ export const JournalMapModal: React.FC<JournalMapModalProps> = ({
       ctx.fillRect(p.px - 2.5, p.pz - 2.5, 5, 5);
     }
 
+    // Relic Shrines
+    for (const sh of POWER_TUNING.SHRINES) {
+      const sp = toPx(sh.x, sh.z);
+      const unlocked = state.powers.unlocked.includes(sh.id);
+      ctx.fillStyle = unlocked ? '#38bdf8' : '#a855f7';
+      ctx.beginPath();
+      ctx.arc(sp.px, sp.pz, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#fef08a';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // Caldera Stronghold
+    const shPos = toPx(PRISON_TUNING.STRONGHOLD_POS.x, PRISON_TUNING.STRONGHOLD_POS.z);
+    ctx.strokeStyle = '#c084fc';
+    ctx.lineWidth = 1.6;
+    ctx.strokeRect(shPos.px - 5, shPos.pz - 5, 10, 10);
+
+    // Daniel Companion + Target Ping
+    if (state.companion.found) {
+      const dp = toPx(state.companion.x, state.companion.z);
+      ctx.fillStyle = state.companion.downed ? '#ef4444' : '#34d399';
+      ctx.beginPath();
+      ctx.arc(dp.px, dp.pz, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#064e3b';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+
+      if (state.companion.targetPos) {
+        const tp = toPx(state.companion.targetPos.x, state.companion.targetPos.z);
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(tp.px, tp.pz, 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    // Aura King live marker during [T] Aura Sight
+    if (state.powers.activeAuraSightSec > 0) {
+      const kp = toPx(state.auraKingAI.x, state.auraKingAI.z);
+      ctx.fillStyle = '#e879f9';
+      ctx.beginPath();
+      ctx.arc(kp.px, kp.pz, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#facc15';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
+
     // Player heading arrow
     const pl = toPx(state.player.x, state.player.z);
     ctx.save();
@@ -267,7 +324,7 @@ export const JournalMapModal: React.FC<JournalMapModalProps> = ({
               }`}
             >
               <CheckCircle2 className="h-3.5 w-3.5" />
-              Objectives ({completedCount}/{objectives.length})
+              Objectives ({completedCount}/{openGoals.length})
             </button>
             <button
               type="button"
@@ -321,16 +378,88 @@ export const JournalMapModal: React.FC<JournalMapModalProps> = ({
           {initialTab === 'objectives' && (
             <div className="flex flex-col gap-3">
               <div className="rounded-lg border border-amber-900/50 bg-amber-950/20 px-4 py-3 text-xs text-amber-200/90">
-                <strong className="text-amber-300">Act {state.act} Goal ({actLabel}):</strong>{' '}
-                {state.act === 1
-                  ? 'Establish shelter, purify water, craft basic tools, and investigate the blocked passes along the southern shoreline.'
-                  : state.act === 2
-                    ? 'Build an Improved Base (Workbench, Farm, Water Collector, Forge), clear inland passes with a Machete/Hatchet, and gear up with Climbing Rope & River Raft.'
-                    : state.act === 3
-                      ? 'Explore Obsidian Caves and Ancient Stone Ruins for Copper Wire, Circuit Boards, Fuel, and the Keycard, then repair the Research Station.'
-                      : state.act === 4
-                        ? 'Haul timber, metal ingots, copper wire, circuit board, diesel fuel, and sea rations to the Southern Boat Slipway & Dock to construct your 4-stage escape craft.'
-                        : 'Cross the final offshore squalls from Lighthouse Shoal into Port Solis Harbor and bring Flight 404 survivor logs home.'}
+                <strong className="text-amber-300">Open Island Goals ({actLabel}):</strong>{' '}
+                Pursue any goal in your own order — craft weapons or steal from the Caldera Stronghold, sneak or fight, bond with Daniel or forge ahead solo.
+              </div>
+
+              {openGoals.map((goal) => (
+                <div
+                  key={goal.id}
+                  className={`flex items-start gap-3 rounded-lg border p-3.5 ${
+                    goal.completed
+                      ? 'border-emerald-800/60 bg-emerald-950/25'
+                      : 'border-stone-800 bg-stone-900/60'
+                  }`}
+                >
+                  {goal.completed ? (
+                    <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
+                  ) : (
+                    <Circle className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" />
+                  )}
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`text-sm font-semibold ${
+                          goal.completed ? 'text-emerald-200 line-through' : 'text-stone-100'
+                        }`}
+                      >
+                        {goal.title}
+                      </span>
+                      {goal.optional && (
+                        <span className="rounded bg-purple-950/80 px-2 py-0.5 text-[10px] font-semibold text-purple-300">
+                          Optional / High-Reward
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-stone-300">{goal.subtitle}</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {goal.routes.map((rt, ri) => (
+                        <span
+                          key={ri}
+                          className="rounded border border-stone-700 bg-stone-950/80 px-2 py-0.5 text-[11px] text-amber-200/90"
+                        >
+                          {rt}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {/* Daniel Intel, Aura King Patterns & Dynamic Log */}
+              <div className="mt-1 rounded-lg border border-stone-800 bg-stone-900/50 p-3.5">
+                <div className="mb-2 flex items-center justify-between text-xs font-bold uppercase tracking-wider text-amber-300">
+                  <span>Survivor Logbook &amp; Intel ({state.journalEntries.length} Entries)</span>
+                  {state.companion.found && (
+                    <span className="text-emerald-300">
+                      Daniel Trust: {Math.round(state.companion.trust)} ({getDanielTrustLabel(state.companion.trust)})
+                    </span>
+                  )}
+                </div>
+                {state.companion.found && getDanielSharedLore(state.companion.loreUnlockedTier).length > 0 && (
+                  <div className="mb-2.5 space-y-1 rounded border border-emerald-900/50 bg-emerald-950/20 p-2.5 text-xs text-emerald-100/90">
+                    {getDanielSharedLore(state.companion.loreUnlockedTier).map((line, i) => (
+                      <div key={i}>{line}</div>
+                    ))}
+                  </div>
+                )}
+                {state.journalEntries.length === 0 ? (
+                  <p className="text-xs text-stone-400">
+                    Your journal fills dynamically as you find Daniel, awaken Shrines, spot the Aura King patrolling, or infiltrate the Stronghold.
+                  </p>
+                ) : (
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {[...state.journalEntries].reverse().map((je) => (
+                      <div key={je.id} className="rounded border border-stone-800 bg-stone-950/75 p-2.5 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-stone-100">{je.title}</span>
+                          <span className="text-[10px] text-amber-400">Day {je.day}</span>
+                        </div>
+                        <p className="mt-1 text-[11px] leading-relaxed text-stone-400">{je.detail}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {objectives.map((step) => (
@@ -487,11 +616,23 @@ export const JournalMapModal: React.FC<JournalMapModalProps> = ({
                   ref={canvasRef}
                   width={320}
                   height={320}
-                  className="rounded-xl border-2 border-stone-700 shadow-inner"
+                  onClick={(e) => {
+                    if (!onPingMapTarget || !canvasRef.current) return;
+                    const rect = canvasRef.current.getBoundingClientRect();
+                    const px = ((e.clientX - rect.left) / rect.width) * 320;
+                    const py = ((e.clientY - rect.top) / rect.height) * 320;
+                    const worldSpan = WORLD.ISLAND_RADIUS * 1.48;
+                    const worldHalf = worldSpan / 2;
+                    const centerZ = 10;
+                    const wx = (px / 320) * worldSpan - worldHalf;
+                    const wz = (py / 320) * worldSpan - worldHalf + centerZ;
+                    onPingMapTarget(Math.round(wx), Math.round(wz));
+                  }}
+                  className="cursor-crosshair rounded-xl border-2 border-stone-700 shadow-inner"
                 />
                 <div className="mt-2 flex items-center gap-2 text-[11px] text-stone-400">
                   <Compass className="h-3.5 w-3.5 text-amber-400" />
-                  <span>Top is North • Fog clears as you walk the island</span>
+                  <span>Top is North • Click map to ping Daniel&apos;s Go-To target</span>
                 </div>
               </div>
 

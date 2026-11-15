@@ -33,6 +33,7 @@ import {
   computeSeaWeatherForLeg,
   countBoatStagesComplete,
   countSeaRations,
+  isDanielAssistingBoat,
   isBoatReadyToLaunch,
   VOYAGE_STOPS,
 } from '../survival/voyage.ts';
@@ -462,11 +463,20 @@ export const BoatVoyageModal: React.FC<BoatVoyageModalProps> = ({
 
         {/* Body */}
         <div className="flex-1 space-y-3 overflow-y-auto p-5">
-          {state.act < 4 && (
-            <div className="rounded-lg border border-amber-800/80 bg-amber-950/35 px-4 py-3 text-xs text-amber-200">
-              <strong className="text-amber-300">Chart Calibration Required (Act 3):</strong> Repair the
-              Radio, Diesel Generator, and Sea Chart at the northern Research Station before drafting and
-              launching the escape craft.
+          {state.storyPhase === 'preparing' ? (
+            <div className="rounded-lg border border-purple-700/70 bg-purple-950/35 px-4 py-3 text-xs text-purple-100">
+              <strong className="text-amber-300">Boat #2 Rebuild &amp; Final Escape:</strong>{' '}
+              Your first vessel was shattered at the outer reef. Rebuild from the salvaged keel, gear up with Shrines or Stronghold weapons, and cast off with Daniel helming into the storm!
+            </div>
+          ) : (
+            <div className="rounded-lg border border-cyan-800/70 bg-cyan-950/30 px-4 py-3 text-xs text-cyan-100">
+              <strong className="text-cyan-300">Open Escape Slipway:</strong>{' '}
+              Assemble the hull, sails, outboard &amp; provisions in any order you choose.
+              {isDanielAssistingBoat(state) && (
+                <span className="ml-1 font-semibold text-emerald-300">
+                  Daniel Build Assistance Active (-1 material cost per part &amp; faster work!).
+                </span>
+              )}
             </div>
           )}
 
@@ -474,6 +484,7 @@ export const BoatVoyageModal: React.FC<BoatVoyageModalProps> = ({
             const def = BOAT_STAGE_DEFS[stageId];
             const completed = Boolean(state.boat[stageId]);
             const check = canBuildBoatStage(state, stageId);
+            const danielAssist = isDanielAssistingBoat(state);
 
             return (
               <div
@@ -504,8 +515,9 @@ export const BoatVoyageModal: React.FC<BoatVoyageModalProps> = ({
                     {/* Materials & Rations */}
                     <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px]">
                       {def.ingredients.map((ing) => {
+                        const req = danielAssist ? Math.max(1, ing.count - 1) : ing.count;
                         const have = countItem(state.inventory, ing.itemId);
-                        const ok = completed || have >= ing.count;
+                        const ok = completed || have >= req;
                         return (
                           <span
                             key={ing.itemId}
@@ -515,7 +527,7 @@ export const BoatVoyageModal: React.FC<BoatVoyageModalProps> = ({
                                 : 'border-stone-700 bg-stone-950 text-rose-300'
                             }`}
                           >
-                            {ITEM_DEFS[ing.itemId].name}: {completed ? ing.count : have}/{ing.count}
+                            {ITEM_DEFS[ing.itemId].name}: {completed ? req : have}/{req}
                           </span>
                         );
                       })}
@@ -627,7 +639,9 @@ export const BoatVoyageModal: React.FC<BoatVoyageModalProps> = ({
               <Ship className="h-4 w-4" />
               {state.boss.defeated
                 ? 'Cast Off for Port Solis (12 nm)'
-                : 'Cast Off & Confront The Aura King'}
+                : state.storyPhase === 'preparing'
+                  ? 'Launch Boat #2 & Final Storm Chase'
+                  : 'Cast Off & Brave the Outer Reef'}
             </button>
           </div>
         </div>

@@ -18,10 +18,13 @@ import { IntroOverlayState } from './scene/PlaneCrashIntro3D.ts';
 import { IntroOverlay } from './ui/IntroOverlay.tsx';
 import {
   BOSS_TUNING,
+  COMPANION_TUNING,
   HUD_TUNING,
   INVENTORY,
   NEEDS,
   PART5_IMMERSION_TUNING,
+  POWER_TUNING,
+  PRISON_TUNING,
   SAVE,
   TIME,
   VOYAGE,
@@ -35,7 +38,29 @@ import {
   retryBossFromCheckpoint,
   setBossCombatPhase,
   startBossEncounter,
+  startFinalSeaChase,
 } from './survival/boss.ts';
+import {
+  discoverDaniel,
+  issueDanielCommand,
+  reviveDaniel,
+  tickDanielSimulation,
+  treatDaniel,
+  type DanielTreatAction,
+} from './survival/companion.ts';
+import {
+  activatePower,
+  getIncomingAuraDamageMult,
+  tickPowers,
+  unlockShrinePower,
+} from './survival/powers.ts';
+import {
+  attackStrongholdGuard,
+  attemptPrisonEscape,
+  recoverEvidenceLocker,
+  stealStrongholdItem,
+  tickAuraKingAI,
+} from './survival/auraAI.ts';
 import {
   createInitialSurvivalState,
   hitGatherNode,
@@ -87,8 +112,10 @@ import {
 import {
   BoatStageId,
   BossDifficulty,
+  DanielCommand,
   ItemId,
   PlayerContext,
+  PrisonEscapePath,
   SaveKind,
   StructureType,
   SurvivalState,
@@ -107,7 +134,13 @@ import {
   scavengeVoyageStop,
   setVoyageThrottle,
   tickVoyage,
+  triggerFirstBoatDestruction,
 } from './survival/voyage.ts';
+import {
+  DanielCommandWheelOverlay,
+  DanielDialogModal,
+  PrisonBreakModal,
+} from './ui/DanielCommandWheel.tsx';
 import { attackWildlife, tickWildlifeAI } from './survival/wildlife.ts';
 import {
   canUnlockGate,
@@ -159,6 +192,10 @@ export default function App() {
   const [openForgeId, setOpenForgeId] = useState<string | null>(null);
   const [isBoatDockOpen, setIsBoatDockOpen] = useState(false);
   const [journalTab, setJournalTab] = useState<JournalTab | null>(null);
+  const [isCommandWheelOpen, setIsCommandWheelOpen] = useState(false);
+  const [isDanielDialogOpen, setIsDanielDialogOpen] = useState(false);
+  const [isPrisonModalOpen, setIsPrisonModalOpen] = useState(false);
+  const [mapPingTarget, setMapPingTarget] = useState<{ x: number; z: number } | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [graphicsQuality, setGraphicsQuality] = useState<GraphicsQuality>(() =>
     loadGraphicsQuality(false)
@@ -233,6 +270,10 @@ export default function App() {
   const prevTideWaterRef = useRef<number>(WORLD.WATER_LEVEL);
   const lastTideWashHourRef = useRef<number>(-99);
   const lastBossSubtitleRef = useRef<string | null>(null);
+  const gHoldTimerRef = useRef<number>(0);
+  const gHoldOpenedWheelRef = useRef<boolean>(false);
+  const danielGatherAccumRef = useRef<number>(0);
+  const lastStealthMsgMsRef = useRef<number>(0);
 
   const dismissTutorialHint = (hintId: string) => {
     setDismissedHints((prev) => {
@@ -318,6 +359,9 @@ export default function App() {
     setOpenChestId(null);
     setOpenForgeId(null);
     setJournalTab(null);
+    setIsCommandWheelOpen(false);
+    setIsDanielDialogOpen(false);
+    setIsPrisonModalOpen(false);
     setIsPaused(false);
     sceneRef.current?.setUiBlocked(false);
     if (options?.relockPointer !== false) {
@@ -338,6 +382,9 @@ export default function App() {
     setOpenChestId(null);
     setOpenForgeId(null);
     setJournalTab(panel === 'journal' ? 'objectives' : panel === 'map' ? 'map' : null);
+    setIsCommandWheelOpen(false);
+    setIsDanielDialogOpen(false);
+    setIsPrisonModalOpen(false);
     sceneRef.current?.setUiBlocked(true);
     sceneRef.current?.unlockPointer();
   };
@@ -371,6 +418,9 @@ export default function App() {
     isInventoryOpen ||
     isBuildMenuOpen ||
     isBoatDockOpen ||
+    isCommandWheelOpen ||
+    isDanielDialogOpen ||
+    isPrisonModalOpen ||
     gameState.voyage.phase === 'stopover' ||
     gameState.voyage.phase === 'arrived' ||
     openChestId !== null ||
@@ -581,7 +631,84 @@ export default function App() {
       return;
     }
 
-    // 2d. Open Escape Boat Slipway & Dockyard (Act 4)
+    // 2d. Daniel Companion, Relic Shrines, Stronghold Armory & Prison
+    if (target.kind === 'daniel') {
+      if (!current.companion.found) {
+        const disc = discoverDaniel(current);
+        commitAndSave(disc.state, 'autosave', 'Found Daniel');
+        audio.playPickup();
+        showStatus(disc.message);
+      } else if (current.companion.downed) {
+        const rev = reviveDaniel(current);
+        commitAndSave(rev.state, 'autosave', 'Daniel Revived');
+        audio.playBandageWrap();
+        showStatus(rev.message);
+        return;
+      }
+      setIsDanielDialogOpen(true);
+      sceneRef.current?.setUiBlocked(true);
+      sceneRef.current?.unlockPointer();
+      return;
+    }
+
+    if (target.kind === 'shrine' && target.powerId) {
+      const shRes = unlockShrinePower(current, target.powerId);
+      if (shRes.ok) {
+        audio.playStoryCue('shrine');
+        commitAndSave(shRes.state, 'autosave', 'Relic Power Awakened');
+      }
+      showStatus(shRes.message);
+      return;
+    }
+
+    if (target.kind === 'armory_item' && target.armoryTarget) {
+      const heist = stealStrongholdItem(current, target.armoryTarget);
+      if (heist.ok) {
+        audio.playPickup();
+        audio.playStoryCue('stealth_alert');
+        pushPickupToast(`Stolen: ${target.label}`, '⚔️');
+        commitAndSave(heist.state, 'autosave', 'Stronghold Heist');
+      }
+      showStatus(heist.message);
+      return;
+    }
+
+    if (target.kind === 'prison_gate') {
+      setIsPrisonModalOpen(true);
+      sceneRef.current?.setUiBlocked(true);
+      sceneRef.current?.unlockPointer();
+      return;
+    }
+
+    if (target.kind === 'prison_vent') {
+      const stance = sceneRef.current?.getCurrentStance() ?? 'stand';
+      const esc = attemptPrisonEscape(current, 'vent_sneak', { stance });
+      if (esc.ok) {
+        audio.playPickup();
+        commitAndSave(esc.state, 'autosave', 'Escaped Prison');
+        sceneRef.current?.teleportPlayerTo(esc.state.player.x, esc.state.player.z);
+        showStatus(esc.message);
+      } else {
+        showStatus(esc.message);
+        setIsPrisonModalOpen(true);
+        sceneRef.current?.setUiBlocked(true);
+        sceneRef.current?.unlockPointer();
+      }
+      return;
+    }
+
+    if (target.kind === 'evidence_locker') {
+      const rec = recoverEvidenceLocker(current);
+      if (rec.ok) {
+        audio.playPickup();
+        pushPickupToast('Recovered Confiscated Gear', '🎒');
+        commitAndSave(rec.state, 'autosave', 'Gear Recovered');
+      }
+      showStatus(rec.message);
+      return;
+    }
+
+    // 2e. Open Escape Boat Slipway & Dockyard (Act 4)
     if (target.kind === 'boat_dock') {
       setIsInventoryOpen(false);
       setIsBuildMenuOpen(false);
@@ -910,7 +1037,9 @@ export default function App() {
         triggerDamageFeedback();
         setGameState((prev) => {
           if (!prev.alive) return prev;
-          const nextHp = Math.max(0, prev.needs.health - dmg);
+          const wardMult = getIncomingAuraDamageMult(prev);
+          const scaledDmg = Math.max(1, Math.round(dmg * wardMult));
+          const nextHp = Math.max(0, prev.needs.health - scaledDmg);
           const died = nextHp <= 0;
           if (died) {
             queueMicrotask(() => {
@@ -925,6 +1054,15 @@ export default function App() {
             stats: died ? { ...prev.stats, deaths: prev.stats.deaths + 1 } : prev.stats,
             needs: { ...prev.needs, health: nextHp },
           };
+        });
+      },
+      onHitStrongholdGuard: (guardId, dmg) => {
+        setGameState((prev) => {
+          const hit = attackStrongholdGuard(prev, guardId, dmg);
+          if (hit.message) {
+            queueMicrotask(() => showStatus(hit.message!));
+          }
+          return hit.state;
         });
       },
       onAdvanceBossPhase: (nextPhase) => {
@@ -1287,7 +1425,7 @@ export default function App() {
             }
           : prev.boss;
 
-        const nextCandidate: SurvivalState = {
+        let nextCandidate: SurvivalState = {
           ...prev,
           clock: nextClock,
           weather: nextWeather,
@@ -1311,6 +1449,64 @@ export default function App() {
             playTimeSec: prev.stats.playTimeSec + dtSec,
           },
         };
+
+        // 5. Relic Power cooldowns, Daniel Companion AI & Aura King Autonomous Patrol / Stealth AI
+        nextCandidate = tickPowers(nextCandidate, dtSec);
+        if (nextCandidate.companion.found && nextCandidate.companion.command === 'gather') {
+          danielGatherAccumRef.current += dtSec;
+        } else {
+          danielGatherAccumRef.current = 0;
+        }
+        const danielTick = tickDanielSimulation(nextCandidate, dtSec, {
+          gameHoursDelta: deltaGameHours,
+          gatherAccumSec: danielGatherAccumRef.current,
+        });
+        nextCandidate = danielTick.state;
+        if (danielGatherAccumRef.current >= COMPANION_TUNING.GATHER_INTERVAL_SEC) {
+          danielGatherAccumRef.current = 0;
+        }
+        if (danielTick.gatheredNote) {
+          queueMicrotask(() => showStatus(danielTick.gatheredNote!));
+        }
+
+        if (nextCandidate.prison.inPrison) {
+          nextCandidate = {
+            ...nextCandidate,
+            prison: {
+              ...nextCandidate.prison,
+              escapeHoursElapsed: nextCandidate.prison.escapeHoursElapsed + dtSec * 0.08,
+            },
+          };
+        } else if (!bossEncounterOngoing && nextCandidate.storyPhase !== 'escaped') {
+          const auraTick = tickAuraKingAI(nextCandidate, dtSec, {
+            stance: scene.getCurrentStance(),
+            hasActiveFireNearby: scene.getHasActiveFireNearby(),
+            gameHoursDelta: deltaGameHours,
+          });
+          nextCandidate = auraTick.state;
+          if (auraTick.caughtNow) {
+            queueMicrotask(() => {
+              audio.playStoryCue('jail_lock');
+              audio.playHurt();
+              triggerDamageFeedback();
+              scene.teleportPlayerTo(PRISON_TUNING.CELL_WORLD_POS.x, PRISON_TUNING.CELL_WORLD_POS.z);
+              showStatus(
+                auraTick.alertMessage ??
+                  'Captured & locked in Stronghold Dungeon! Inspect the gate, cracked vent [C/Z], or signal Daniel.'
+              );
+            });
+          } else if (auraTick.alertMessage) {
+            const nowMs = performance.now();
+            if (nowMs - lastStealthMsgMsRef.current > 4000) {
+              lastStealthMsgMsRef.current = nowMs;
+              queueMicrotask(() => {
+                audio.playStoryCue('stealth_alert');
+                showStatus(auraTick.alertMessage!);
+              });
+            }
+          }
+        }
+
         const promotedAct = computeCurrentAct(nextCandidate);
         if (promotedAct > nextCandidate.act) {
           if (promotedAct > lastActToastRef.current) {
@@ -1419,7 +1615,9 @@ export default function App() {
 
       if (e.code === 'Escape') {
         e.preventDefault();
-        if (currentPanel !== null) {
+        if (isCommandWheelOpen || isDanielDialogOpen || isPrisonModalOpen) {
+          closeAllMenusAndLock({ relockPointer: true });
+        } else if (currentPanel !== null) {
           closeAllMenusAndLock({ relockPointer: true });
         } else if (activeBuildType !== null) {
           cancelBuildMode();
@@ -1433,9 +1631,58 @@ export default function App() {
 
       if (e.code.startsWith('Digit')) {
         const num = Number(e.code.replace('Digit', ''));
+        if (isCommandWheelOpen) {
+          const cmds: DanielCommand[] = ['follow', 'wait', 'gather', 'guard', 'build', 'attack', 'goto'];
+          const pick = cmds[num - 1];
+          if (pick) {
+            e.preventDefault();
+            handleIssueDanielCommand(pick);
+          }
+          return;
+        }
         if (num >= 1 && num <= INVENTORY.HOTBAR_SIZE) {
           setGameState((prev) => ({ ...prev, selectedSlot: num - 1 }));
         }
+        return;
+      }
+
+      const sightKey = kb.auraSight ?? DEFAULT_KEYBINDS.auraSight;
+      if (e.code === sightKey && !e.repeat && !isUiModalOpen) {
+        e.preventDefault();
+        const res = activatePower(stateRef.current, 'aura_sight');
+        if (res.ok) {
+          audio.playStoryCue('sight_pulse');
+          setGameState(res.state);
+        }
+        showStatus(res.message);
+        return;
+      }
+
+      const cleaveKey = kb.sovereignCleave ?? DEFAULT_KEYBINDS.sovereignCleave;
+      if (e.code === cleaveKey && !e.repeat && !isUiModalOpen) {
+        e.preventDefault();
+        const res = activatePower(stateRef.current, 'sovereign_cleave');
+        if (res.ok) {
+          audio.playStoryCue('cleave');
+          sceneRef.current?.triggerSovereignCleaveWave();
+          let nextState = res.state;
+          const px = nextState.player.x;
+          const pz = nextState.player.z;
+          for (const g of nextState.stronghold.guards) {
+            if (g.hp > 0 && Math.hypot(g.x - px, g.z - pz) <= POWER_TUNING.CLEAVE_RADIUS_M) {
+              nextState = attackStrongholdGuard(nextState, g.id, POWER_TUNING.CLEAVE_DAMAGE).state;
+            }
+          }
+          if (nextState.boss.combatPhase === 'phase3_boat' || nextState.boss.combatPhase === 'phase1' || nextState.boss.combatPhase === 'phase2') {
+            nextState = applyPlayerDamageToBoss(nextState, POWER_TUNING.CLEAVE_DAMAGE, {
+              isHeavy: true,
+              ignoreShield: true,
+              isFireOrFlare: false,
+            }).state;
+          }
+          setGameState(nextState);
+        }
+        showStatus(res.message);
         return;
       }
 
@@ -1452,26 +1699,68 @@ export default function App() {
       }
 
       const consumeKey = kb.consume ?? DEFAULT_KEYBINDS.consume;
-      if (e.code === consumeKey && !isUiModalOpen) {
+      if (e.code === consumeKey && !e.repeat && !isUiModalOpen) {
         e.preventDefault();
-        const equipped = getEquipped(stateRef.current.inventory, stateRef.current.selectedSlot);
-        if (equipped.def && (equipped.def.food !== undefined || equipped.def.id === 'medicinal_poultice')) {
-          handleConsumeSlot(stateRef.current.selectedSlot);
-        } else {
-          showStatus(`Select food, water, or medicine on hotbar [1–6] and press [${consumeKey.replace('Key', '')}] to consume.`);
-        }
+        gHoldOpenedWheelRef.current = false;
+        window.clearTimeout(gHoldTimerRef.current);
+        gHoldTimerRef.current = window.setTimeout(() => {
+          gHoldOpenedWheelRef.current = true;
+          if (!stateRef.current.companion.found) {
+            showStatus('Meet Daniel in the Western Basalt Caves before issuing Companion Orders.');
+            return;
+          }
+          setIsCommandWheelOpen(true);
+          sceneRef.current?.setUiBlocked(true);
+          sceneRef.current?.unlockPointer();
+        }, 180);
         return;
       }
     };
 
+    const onKeyUp = (e: KeyboardEvent) => {
+      const kb = extSettings.keybinds ?? DEFAULT_KEYBINDS;
+      const consumeKey = kb.consume ?? DEFAULT_KEYBINDS.consume;
+      if (e.code === consumeKey) {
+        window.clearTimeout(gHoldTimerRef.current);
+        if (gHoldOpenedWheelRef.current) {
+          setIsCommandWheelOpen(false);
+          sceneRef.current?.setUiBlocked(false);
+          sceneRef.current?.lockPointer();
+          gHoldOpenedWheelRef.current = false;
+          return;
+        }
+        if (!isUiModalOpen && screen === 'playing' && !isPaused) {
+          const equipped = getEquipped(stateRef.current.inventory, stateRef.current.selectedSlot);
+          if (
+            equipped.def &&
+            (equipped.def.food !== undefined || equipped.def.id === 'medicinal_poultice')
+          ) {
+            handleConsumeSlot(stateRef.current.selectedSlot);
+          } else {
+            showStatus(
+              `Tap [${consumeKey.replace('Key', '')}] to consume food/meds, or Hold [${consumeKey.replace('Key', '')}] for Daniel Orders.`
+            );
+          }
+        }
+      }
+    };
+
     window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    return () => {
+      window.clearTimeout(gHoldTimerRef.current);
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+    };
   }, [
     screen,
     isPaused,
     currentPanel,
     activeBuildType,
     isUiModalOpen,
+    isCommandWheelOpen,
+    isDanielDialogOpen,
+    isPrisonModalOpen,
     extSettings.keybinds,
   ]);
 
@@ -1541,7 +1830,49 @@ export default function App() {
     showStatus(res.message);
   };
 
-  const handleDebugTeleport = (dest: 'beach' | 'camp' | 'caves' | 'ruins' | 'station' | 'dock') => {
+  const handleDanielTreat = (action: DanielTreatAction) => {
+    const res = treatDaniel(stateRef.current, action);
+    if (res.ok) {
+      audio.playCraft();
+      commitAndSave(res.state, 'autosave', 'Daniel Relationship Updated');
+    } else {
+      audio.playHurt();
+    }
+    showStatus(res.message);
+  };
+
+  const handleIssueDanielCommand = (cmd: DanielCommand) => {
+    const target =
+      cmd === 'goto'
+        ? mapPingTarget ?? { x: stateRef.current.player.x, z: stateRef.current.player.z }
+        : { x: stateRef.current.player.x, z: stateRef.current.player.z };
+    const res = issueDanielCommand(stateRef.current, cmd, target);
+    setIsCommandWheelOpen(false);
+    sceneRef.current?.setUiBlocked(false);
+    sceneRef.current?.lockPointer();
+    commitAndSave(res.state, 'autosave', `Daniel: ${cmd}`);
+    showStatus(res.message);
+  };
+
+  const handlePrisonAttemptEscape = (path: PrisonEscapePath) => {
+    const stance = sceneRef.current?.getCurrentStance() ?? 'stand';
+    const res = attemptPrisonEscape(stateRef.current, path, { stance });
+    if (res.ok) {
+      audio.playBuild();
+      setIsPrisonModalOpen(false);
+      sceneRef.current?.setUiBlocked(false);
+      sceneRef.current?.lockPointer();
+      sceneRef.current?.teleportPlayerTo(res.state.player.x, res.state.player.z);
+      commitAndSave(res.state, 'autosave', 'Escaped Dungeon');
+    } else {
+      audio.playHurt();
+    }
+    showStatus(res.message);
+  };
+
+  const handleDebugTeleport = (
+    dest: 'beach' | 'camp' | 'caves' | 'ruins' | 'station' | 'dock' | 'daniel' | 'stronghold'
+  ) => {
     const spots: Record<typeof dest, { x: number; z: number; label: string }> = {
       beach: { x: WORLD.PLAYER_SPAWN.x, z: WORLD.PLAYER_SPAWN.z, label: 'Southern Beach' },
       camp: {
@@ -1560,6 +1891,16 @@ export default function App() {
         x: WORLD.BOAT_DOCK_POS.x,
         z: WORLD.BOAT_DOCK_POS.z - 6,
         label: 'Southern Boat Slipway Dock',
+      },
+      daniel: {
+        x: COMPANION_TUNING.SPAWN_POS.x + 2,
+        z: COMPANION_TUNING.SPAWN_POS.z + 3,
+        label: 'Daniel Cave Shelter',
+      },
+      stronghold: {
+        x: PRISON_TUNING.STRONGHOLD_POS.x,
+        z: PRISON_TUNING.STRONGHOLD_POS.z + 15,
+        label: 'Caldera Stronghold Gate',
       },
     };
     const spot = spots[dest];
@@ -1632,16 +1973,34 @@ export default function App() {
 
   const handleLaunchVoyage = () => {
     const cur = stateRef.current;
-    if (cur.act >= 4 && isBoatReadyToLaunch(cur.boat) && !cur.boss.defeated) {
-      const encounterState = startBossEncounter(cur, cur.bossDifficulty, 1);
+    if (isBoatReadyToLaunch(cur.boat) && !cur.boss.defeated) {
+      // Fixed Story Event #2: Launching Boat #1 triggers Aura King shattering the vessel at the outer reef
+      if (cur.storyPhase !== 'preparing' && cur.storyPhase !== 'final_boat_chase') {
+        const shattered = triggerFirstBoatDestruction(cur);
+        audio.playStoryCue('boat_shatter');
+        audio.playThunder();
+        triggerDamageFeedback();
+        setIsBoatDockOpen(false);
+        sceneRef.current?.setUiBlocked(false);
+        sceneRef.current?.lockPointer();
+        sceneRef.current?.snapPlayerToGround(shattered.player.x, shattered.player.z, Math.PI);
+        commitAndSave(applyActPromotion(shattered), 'autosave', 'Boat #1 Shattered');
+        showStatus(
+          'Boat #1 shattered by The Aura King at the reef! Keel salvaged — rebuild Boat #2, awaken Shrines, or raid the Stronghold.'
+        );
+        return;
+      }
+
+      // Fixed Story Event #3: Launching Boat #2 enters the playable Storm Sea Chase
+      const chaseState = startFinalSeaChase(cur, cur.bossDifficulty ?? 'normal');
       audio.playThunder();
-      audio.setBossMusicState(true, 1);
+      audio.setBossMusicState(true, 3);
       setIsBoatDockOpen(false);
       sceneRef.current?.setUiBlocked(false);
       sceneRef.current?.lockPointer();
-      sceneRef.current?.teleportToBossArena(1);
-      commitAndSave(encounterState, 'autosave', 'Aura King Showdown');
-      showStatus('The Aura King rises to block your escape!');
+      sceneRef.current?.teleportToBossArena(3);
+      commitAndSave(chaseState, 'autosave', 'Final Sea Chase');
+      showStatus('FINAL SEA CHASE: Daniel takes the helm — shatter The Aura King across storm seas!');
       return;
     }
     const res = launchEscapeVoyage(cur);
@@ -1683,11 +2042,15 @@ export default function App() {
     const cur = stateRef.current;
     const grants: Array<[ItemId, number]> = [
       ['machete', 1],
+      ['aura_rifle', 1],
+      ['harpoon_gun', 1],
       ['bow', 1],
       ['flare_gun', 1],
       ['fire_bomb', 6],
       ['spear', 1],
       ['medicinal_poultice', 4],
+      ['rifle_ammo', 24],
+      ['harpoon_bolt', 12],
       ['arrow', 36],
       ['flare_ammo', 8],
       ['cooked_fish', 4],
@@ -1700,13 +2063,20 @@ export default function App() {
         inv = addItem(inv, id, needed - have).inventory;
       }
     }
+    const rifleIdx = inv.findIndex((s) => s?.itemId === 'aura_rifle');
     const macheteIdx = inv.findIndex((s) => s?.itemId === 'machete');
-    const bowIdx = inv.findIndex((s) => s?.itemId === 'bow');
     const prepared: SurvivalState = {
       ...cur,
       act: 4,
+      storyPhase: 'preparing',
       inventory: inv,
-      selectedSlot: macheteIdx >= 0 ? macheteIdx : bowIdx >= 0 ? bowIdx : cur.selectedSlot,
+      selectedSlot: rifleIdx >= 0 ? rifleIdx : macheteIdx >= 0 ? macheteIdx : cur.selectedSlot,
+      companion: {
+        ...cur.companion,
+        found: true,
+        trust: Math.max(75, cur.companion.trust),
+        loreUnlockedTier: 4,
+      },
       needs: {
         ...cur.needs,
         health: 100,
@@ -1736,22 +2106,25 @@ export default function App() {
         repair_chart: true,
       },
     };
-    const started = startBossEncounter(prepared, cur.bossDifficulty ?? 'normal', 1);
+    const started = startFinalSeaChase(prepared, cur.bossDifficulty ?? 'normal');
     setIsInventoryOpen(false);
     setIsBuildMenuOpen(false);
     setIsBoatDockOpen(false);
+    setIsCommandWheelOpen(false);
+    setIsDanielDialogOpen(false);
+    setIsPrisonModalOpen(false);
     setOpenChestId(null);
     setOpenForgeId(null);
     cancelBuildMode();
     setJournalTab(null);
     setIsPaused(false);
     sceneRef.current?.skipPlaneCrashIntro();
-    commitAndSave(started, 'autosave', 'Boss Showdown');
-    audio.setBossMusicState(true, 1);
-    sceneRef.current?.teleportToBossArena(1);
+    commitAndSave(started, 'autosave', 'Final Sea Chase');
+    audio.setBossMusicState(true, 3);
+    sceneRef.current?.teleportToBossArena(3);
     sceneRef.current?.setUiBlocked(false);
     sceneRef.current?.lockPointer();
-    showStatus('SHOWDOWN: The Aura King blocks your escape!');
+    showStatus('FINAL SEA CHASE: Daniel helms Boat #2 — defeat The Aura King!');
   };
   debugBossRef.current = handleDebugStartBossFight;
 
@@ -2077,6 +2450,17 @@ export default function App() {
           onDebugCycleWeather={handleDebugCycleWeather}
           onDebugFastSail={handleDebugFastSail}
           onDebugStartBossFight={handleDebugStartBossFight}
+          onOpenCommandWheel={() => {
+            if (!gameState.companion.found) return;
+            setIsCommandWheelOpen(true);
+            sceneRef.current?.setUiBlocked(true);
+            sceneRef.current?.unlockPointer();
+          }}
+          onOpenPrisonModal={() => {
+            setIsPrisonModalOpen(true);
+            sceneRef.current?.setUiBlocked(true);
+            sceneRef.current?.unlockPointer();
+          }}
           combatHud={combatHud}
         />
       )}
@@ -2164,8 +2548,62 @@ export default function App() {
         initialTab={journalTab ?? 'objectives'}
         state={gameState}
         onChangeTab={(tab) => setJournalTab(tab)}
+        onPingMapTarget={(wx, wz) => {
+          setMapPingTarget({ x: wx, z: wz });
+          if (gameState.companion.found) {
+            const ordered = issueDanielCommand(stateRef.current, 'goto', { x: wx, z: wz });
+            setGameState(ordered.state);
+            showStatus(`Map Pinged (${wx}, ${wz}) — Daniel moving to target!`);
+          } else {
+            showStatus(`Map Marker set at (${wx}m, ${wz}m).`);
+          }
+        }}
         onClose={() => closeAllMenusAndLock({ relockPointer: true })}
       />
+
+      <DanielCommandWheelOverlay
+        open={screen === 'playing' && isCommandWheelOpen && gameState.companion.found}
+        daniel={gameState.companion}
+        onIssueCommand={handleIssueDanielCommand}
+        onClose={() => {
+          setIsCommandWheelOpen(false);
+          sceneRef.current?.setUiBlocked(false);
+          sceneRef.current?.lockPointer();
+        }}
+      />
+
+      {screen === 'playing' && isDanielDialogOpen && (
+        <DanielDialogModal
+          daniel={gameState.companion}
+          hasFood={gameState.inventory.some(
+            (s) =>
+              s &&
+              ['ration_bar', 'cooked_meat', 'cooked_fish', 'dried_meat', 'dried_fish', 'berries', 'coconut'].includes(
+                s.itemId
+              )
+          )}
+          hasWater={gameState.inventory.some(
+            (s) => s && (s.itemId === 'water_bottle_clean' || s.itemId === 'coconut')
+          )}
+          hasHeal={gameState.inventory.some(
+            (s) => s && (s.itemId === 'medicinal_poultice' || s.itemId === 'herb')
+          )}
+          onTreat={handleDanielTreat}
+          onOpenCommandWheel={() => setIsCommandWheelOpen(true)}
+          onClose={() => closeAllMenusAndLock({ relockPointer: true })}
+        />
+      )}
+
+      {screen === 'playing' && isPrisonModalOpen && gameState.prison.inPrison && (
+        <PrisonBreakModal
+          prison={gameState.prison}
+          daniel={gameState.companion}
+          hasLockpick={countItem(gameState.inventory, 'lockpick') > 0}
+          stance={sceneRef.current?.getCurrentStance() ?? 'stand'}
+          onAttemptEscape={handlePrisonAttemptEscape}
+          onClose={() => closeAllMenusAndLock({ relockPointer: true })}
+        />
+      )}
 
       <InventoryCraftModal
         isOpen={isInventoryOpen}

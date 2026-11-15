@@ -91,13 +91,17 @@ interface SurvivalHUDProps {
   onOpenMap: () => void;
   onTogglePause: () => void;
   onToggleMute: () => void;
-  onDebugTeleport?: (dest: 'beach' | 'camp' | 'caves' | 'ruins' | 'station' | 'dock') => void;
+  onDebugTeleport?: (
+    dest: 'beach' | 'camp' | 'caves' | 'ruins' | 'station' | 'dock' | 'daniel' | 'stronghold'
+  ) => void;
   onDebugGrantSupplies?: () => void;
   onDebugStage6Setup?: () => void;
   onDebugAdvanceTime?: () => void;
   onDebugCycleWeather?: () => void;
   onDebugFastSail?: () => void;
   onDebugStartBossFight?: () => void;
+  onOpenCommandWheel?: () => void;
+  onOpenPrisonModal?: () => void;
   combatHud?: CombatHudStatus;
 }
 
@@ -137,6 +141,8 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
   onDebugCycleWeather,
   onDebugFastSail,
   onDebugStartBossFight,
+  onOpenCommandWheel,
+  onOpenPrisonModal,
   combatHud,
 }) => {
   const [hotbarHover, setHotbarHover] = useState<HoverTooltipData | null>(null);
@@ -329,7 +335,7 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
       {!photoMode && (
       <div className="flex items-start justify-between gap-2.5 p-2.5 sm:p-3">
         {/* Top-Left: Only shown when [F3] Performance Monitor is explicitly toggled */}
-        <div className="min-w-[140px]">
+        <div className="min-w-0 flex-1">
           {showPerfOverlay && perfMetrics && (
             <div className="pointer-events-auto rounded-md border border-cyan-500/40 bg-stone-950/85 px-2.5 py-1.5 font-mono text-[10px] leading-relaxed text-cyan-200 shadow-lg">
               <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-0.5 font-semibold text-cyan-300">
@@ -440,11 +446,11 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
         </div>
 
         {/* Top-Right: Single-Line Concise Objective & Active Build/Save Pill */}
-        <div className="flex flex-col items-end gap-1.5">
+        <div className="flex min-w-0 flex-1 flex-col items-end gap-1.5">
           {!bossActive && (
             <div
               data-testid="hud-objective"
-              className="flex max-w-xs items-center gap-2 rounded-lg border border-white/10 bg-stone-950/45 px-2.5 py-1.5 text-right shadow-sm backdrop-blur-xs"
+              className="flex max-w-full sm:max-w-xs items-center gap-2 rounded-lg border border-white/10 bg-stone-950/45 px-2.5 py-1.5 text-right shadow-sm backdrop-blur-xs"
             >
               <span className="truncate text-xs font-medium text-stone-100">
                 {currentObjective.title}
@@ -455,6 +461,90 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
                 </span>
               )}
             </div>
+          )}
+
+          {/* Compact Companion, Stealth & Powers Status Pills */}
+          {!bossActive && state.companion.found && (
+            <button
+              type="button"
+              data-testid="hud-daniel-pill"
+              onClick={() => onOpenCommandWheel?.()}
+              className="pointer-events-auto flex items-center gap-2 rounded-lg border border-amber-500/35 bg-stone-950/60 px-2.5 py-1 text-[11px] text-amber-100 shadow-sm hover:border-amber-400"
+              title="Hold [G] or Click to open Daniel Command Wheel"
+            >
+              <span className={state.companion.downed ? 'text-rose-400 font-bold' : 'text-emerald-300 font-semibold'}>
+                {state.companion.downed ? 'Daniel DOWNED' : `Daniel • ${state.companion.command}`}
+              </span>
+              <span className="rounded bg-amber-950/80 px-1.5 py-0.5 text-[10px] text-amber-200">
+                Trust {Math.round(state.companion.trust)}
+              </span>
+              <span className="text-[10px] text-stone-400">[Hold G]</span>
+            </button>
+          )}
+
+          {!bossActive &&
+            (state.auraKingAI.awareness !== 'unaware' || state.stronghold.alertLevel >= 15) && (
+              <div
+                data-testid="hud-stealth-pill"
+                className={`flex items-center gap-2 rounded-lg border px-2.5 py-1 text-[11px] font-semibold shadow-sm ${
+                  state.auraKingAI.awareness === 'hunting' ||
+                  state.auraKingAI.awareness === 'catching' ||
+                  state.stronghold.alertLevel >= 70
+                    ? 'border-rose-500/60 bg-rose-950/75 text-rose-200'
+                    : 'border-purple-500/45 bg-purple-950/65 text-purple-200'
+                }`}
+              >
+                <span>
+                  👁 Aura Watch: {state.auraKingAI.awareness.toUpperCase()}
+                </span>
+                <span className="font-mono text-[10px]">
+                  {Math.round(Math.max(state.auraKingAI.suspicion, state.stronghold.alertLevel))}%
+                </span>
+              </div>
+            )}
+
+          {state.powers.unlocked.length > 0 && (
+            <div data-testid="hud-powers-pill" className="flex flex-wrap justify-end gap-1 text-[10px]">
+              {state.powers.unlocked.includes('aura_ward') && (
+                <span className="rounded border border-sky-500/40 bg-sky-950/60 px-1.5 py-0.5 text-sky-200">
+                  🛡 Ward
+                </span>
+              )}
+              {state.powers.unlocked.includes('tempest_dash') && (
+                <span className="rounded border border-teal-500/40 bg-teal-950/60 px-1.5 py-0.5 text-teal-200">
+                  💨 [Q] Dash+
+                </span>
+              )}
+              {state.powers.unlocked.includes('sovereign_cleave') && (
+                <span className="rounded border border-amber-500/40 bg-amber-950/60 px-1.5 py-0.5 text-amber-200">
+                  ⚡ [K] Cleave
+                  {state.powers.cooldowns.sovereign_cleave > 0
+                    ? ` (${Math.ceil(state.powers.cooldowns.sovereign_cleave)}s)`
+                    : ''}
+                </span>
+              )}
+              {state.powers.unlocked.includes('aura_sight') && (
+                <span className="rounded border border-purple-500/40 bg-purple-950/60 px-1.5 py-0.5 text-purple-200">
+                  👁 [T] Sight
+                  {state.powers.activeAuraSightSec > 0
+                    ? ` (${Math.ceil(state.powers.activeAuraSightSec)}s)`
+                    : state.powers.cooldowns.aura_sight > 0
+                      ? ` (${Math.ceil(state.powers.cooldowns.aura_sight)}s)`
+                      : ''}
+                </span>
+              )}
+            </div>
+          )}
+
+          {state.prison.inPrison && (
+            <button
+              type="button"
+              data-testid="hud-prison-break-btn"
+              onClick={() => onOpenPrisonModal?.()}
+              className="pointer-events-auto rounded-lg border border-purple-400/75 bg-purple-950/85 px-3 py-1.5 text-xs font-bold text-amber-200 shadow-lg hover:bg-purple-900"
+            >
+              ⛓ Captured in Dungeon — Escape Routes [E]
+            </button>
           )}
 
           {activeBuildType && (
@@ -946,10 +1036,11 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
               <span className="w-full text-right font-bold uppercase tracking-wider text-amber-400">
                 Debug Tools
               </span>
-              {(['beach', 'camp', 'caves', 'ruins', 'station', 'dock'] as const).map((dest) => (
+              {(['beach', 'camp', 'caves', 'ruins', 'station', 'dock', 'daniel', 'stronghold'] as const).map((dest) => (
                 <button
                   key={dest}
                   type="button"
+                  data-testid={`debug-tp-${dest}`}
                   onClick={() => onDebugTeleport(dest)}
                   className="rounded bg-stone-800 px-1.5 py-0.5 text-stone-200 hover:bg-amber-600 hover:text-stone-950"
                 >

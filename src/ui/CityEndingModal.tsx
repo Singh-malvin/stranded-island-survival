@@ -62,7 +62,10 @@ export const CityEndingModal: React.FC<CityEndingModalProps> = ({
           <p className="mt-2 text-xs leading-relaxed text-stone-300">
             With The Aura King shattered in the eye of the storm and the island&apos;s dark aura
             broken forever, sunlight pours across a calm horizon. Guided by the Lighthouse Shoal
-            and Port Solis Coastguard cutters, Flight 404&apos;s lone survivor sails home at sunrise.
+            and Port Solis Coastguard cutters,{' '}
+            {state.companion.found
+              ? 'you and Daniel Vasquez sail home together as Flight 404’s two survivors at sunrise.'
+              : 'you sail home across calm waters into Port Solis Harbor at sunrise.'}
           </p>
           {dethronedUnlocked && (
             <div className="mx-auto mt-3 inline-flex items-center gap-2 rounded-lg border border-purple-400/60 bg-gradient-to-r from-purple-950/85 via-amber-950/65 to-purple-950/85 px-3.5 py-1.5 text-xs font-bold text-amber-200 shadow-lg">
@@ -158,6 +161,18 @@ export const CityEndingModal: React.FC<CityEndingModalProps> = ({
                     {state.boss.defeated ? 'Aura Crown Shattered' : 'Bypassed'}
                   </strong>
                 </span>
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] text-purple-200/90">
+                <span>
+                  Companion:{' '}
+                  <strong>
+                    {state.companion.found
+                      ? `Daniel Rescued (Trust ${Math.round(state.companion.trust)})`
+                      : 'Solo Survivor Run'}
+                  </strong>
+                </span>
+                <span>• Shrines Awakened: {state.powers.unlocked.length}/4</span>
+                <span>• Prison Escapes: {state.prison.escapedPathsUsed.length}</span>
               </div>
             </div>
           </div>

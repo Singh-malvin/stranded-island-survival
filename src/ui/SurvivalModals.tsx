@@ -220,17 +220,19 @@ const KEYBIND_GROUPS: Array<{
     title: 'Actions',
     rows: [
       { action: 'interact', label: 'Interact / Gather' },
-      { action: 'consume', label: 'Consume Item' },
+      { action: 'consume', label: 'Consume (Tap) / Daniel Wheel (Hold)' },
       { action: 'inspect', label: 'Inspect Item' },
       { action: 'build', label: 'Build Menu' },
     ],
   },
   {
-    title: 'Combat',
+    title: 'Combat & Powers',
     rows: [
       { action: 'block', label: 'Block / Parry (or RMB)' },
-      { action: 'dodge', label: 'Dodge Roll' },
-      { action: 'throwBomb', label: 'Throw Fire Bomb' },
+      { action: 'dodge', label: 'Dodge Roll / Tempest Dash' },
+      { action: 'throwBomb', label: 'Throw Fire Bomb / Spear' },
+      { action: 'sovereignCleave', label: 'Sovereign Cleave Power' },
+      { action: 'auraSight', label: 'Aura Sight Power' },
     ],
   },
   {
