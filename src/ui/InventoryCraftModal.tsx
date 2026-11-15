@@ -8,6 +8,7 @@ import { FloatingItemTooltip, HoverTooltipData } from './ItemTooltip.tsx';
 
 interface InventoryCraftModalProps {
   isOpen: boolean;
+  focusMode?: 'inventory' | 'craft';
   state: SurvivalState;
   nearbyStations: ReadonlySet<CraftStation>;
   onClose: () => void;
@@ -20,6 +21,7 @@ interface InventoryCraftModalProps {
 
 export const InventoryCraftModal: React.FC<InventoryCraftModalProps> = ({
   isOpen,
+  focusMode = 'inventory',
   state,
   nearbyStations,
   onClose,
@@ -73,10 +75,10 @@ export const InventoryCraftModal: React.FC<InventoryCraftModalProps> = ({
             <Backpack className="h-5 w-5 text-amber-400" />
             <div>
               <h2 className="text-lg font-bold tracking-wide text-stone-100">
-                SURVIVOR PACK & FIELD CRAFTING
+                {focusMode === 'craft' ? 'FIELD CRAFTING & SURVIVOR PACK' : 'SURVIVOR PACK & FIELD CRAFTING'}
               </h2>
               <p className="text-xs text-stone-400">
-                Click two slots to swap or stack items • Craft tools & boil water on the right
+                [I] Pack • [Tab] Crafting • Click two slots to swap or stack items
               </p>
             </div>
           </div>
@@ -126,7 +128,11 @@ export const InventoryCraftModal: React.FC<InventoryCraftModalProps> = ({
         {/* Body */}
         <div className="grid flex-1 grid-cols-1 gap-6 overflow-y-auto p-6 lg:grid-cols-12">
           {/* Left Column: Hotbar + Backpack Grid + Item Inspector (5 cols) */}
-          <div className="flex flex-col gap-5 lg:col-span-5">
+          <div
+            className={`flex flex-col gap-5 rounded-xl p-2 transition lg:col-span-5 ${
+              focusMode === 'inventory' ? 'ring-1 ring-amber-400/35 bg-stone-900/25' : ''
+            }`}
+          >
             <div>
               <div className="mb-2 text-xs font-bold uppercase tracking-wider text-amber-400">
                 Quick Hotbar (Keys 1–6)
@@ -293,7 +299,11 @@ export const InventoryCraftModal: React.FC<InventoryCraftModalProps> = ({
           </div>
 
           {/* Right Column: Tiered Crafting Recipes (7 cols) */}
-          <div className="flex flex-col gap-4 lg:col-span-7">
+          <div
+            className={`flex flex-col gap-4 rounded-xl p-2 transition lg:col-span-7 ${
+              focusMode === 'craft' ? 'ring-1 ring-amber-400/35 bg-stone-900/25' : ''
+            }`}
+          >
             {/* Tier Tabs */}
             <div className="flex items-center gap-2 border-b border-stone-800 pb-3">
               {(

@@ -219,6 +219,42 @@ export function getEasternRiverCenterX(z: number): number {
   return 68 + Math.sin((z - (WORLD.ACT1_RIDGE_Z + 2)) * 0.032) * 12;
 }
 
+interface ExternalTerrainGrid {
+  heights: Float32Array;
+  cliffMask: Uint8Array | null;
+  res: number;
+  spanM: number;
+}
+
+let externalTerrainGrid: ExternalTerrainGrid | null = null;
+
+/**
+ * Registers the high-resolution Blender-sculpted terrain heightfield & BVH cliff obstacle mask.
+ * Pure Node tests keep `externalTerrainGrid = null` and use the deterministic analytic baseline.
+ */
+export function setExternalTerrainGrid(
+  heights: Float32Array,
+  cliffMask: Uint8Array | null,
+  res: number,
+  spanM: number
+): void {
+  externalTerrainGrid = { heights, cliffMask, res, spanM };
+}
+
+export function clearExternalTerrainGrid(): void {
+  externalTerrainGrid = null;
+}
+
+export function isPointBlockedByCliffMask(x: number, z: number): boolean {
+  const g = externalTerrainGrid;
+  if (!g || !g.cliffMask) return false;
+  const half = g.spanM * 0.5;
+  if (x < -half || x > half || z < -half || z > half) return false;
+  const ix = Math.max(0, Math.min(g.res - 1, Math.round(((x + half) / g.spanM) * (g.res - 1))));
+  const iy = Math.max(0, Math.min(g.res - 1, Math.round(((-z + half) / g.spanM) * (g.res - 1))));
+  return g.cliffMask[iy * g.res + ix] > 0;
+}
+
 /**
  * Deterministic spread-out 3D heightmap shared between pure gameplay physics,
  * node/wildlife placement, Fog-of-War, and Three.js terrain geometry.
@@ -228,6 +264,24 @@ export function sampleIslandHeight(
   z: number,
   islandRadius: number = WORLD.ISLAND_RADIUS
 ): number {
+  const g = externalTerrainGrid;
+  if (g && Math.abs(islandRadius - WORLD.ISLAND_RADIUS) < 1) {
+    const half = g.spanM * 0.5;
+    if (x >= -half && x <= half && z >= -half && z <= half) {
+      const u = Math.max(0, Math.min(g.res - 1.0001, ((x + half) / g.spanM) * (g.res - 1)));
+      const v = Math.max(0, Math.min(g.res - 1.0001, ((-z + half) / g.spanM) * (g.res - 1)));
+      const i0 = Math.floor(u);
+      const j0 = Math.floor(v);
+      const fx = u - i0;
+      const fy = v - j0;
+      const r = g.res;
+      const h00 = g.heights[j0 * r + i0];
+      const h10 = g.heights[j0 * r + i0 + 1];
+      const h01 = g.heights[(j0 + 1) * r + i0];
+      const h11 = g.heights[(j0 + 1) * r + i0 + 1];
+      return (h00 * (1 - fx) + h10 * fx) * (1 - fy) + (h01 * (1 - fx) + h11 * fx) * fy;
+    }
+  }
   const cz = -8;
   const rx = islandRadius * 0.72; // ~187m half-width
   const rz = islandRadius * 0.68; // ~177m half-length
@@ -927,11 +981,15 @@ export function resolveWorldMovement(
       const dirX = (next.x - cx) / stepD;
       const dirZ = (next.z - cz) / stepD;
       const probeDist = COLLISION_TUNING.PLAYER_RADIUS;
+      const cliffMaskBlocked =
+        isPointBlockedByCliffMask(next.x + dirX * probeDist, next.z + dirZ * probeDist) ||
+        isPointBlockedByCliffMask(next.x, next.z);
       const aheadH = sampleIslandHeight(next.x + dirX * probeDist, next.z + dirZ * probeDist);
       const stepSlope = uphillRise / stepD;
       const aheadSlope = (aheadH - curH) / (stepD + probeDist);
 
       if (
+        cliffMaskBlocked ||
         (uphillRise > 0.005 && stepSlope > COLLISION_TUNING.MAX_SLOPE_RISE_PER_M) ||
         (aheadH - curH > 0.18 && aheadSlope > COLLISION_TUNING.MAX_SLOPE_RISE_PER_M)
       ) {
@@ -946,7 +1004,18 @@ export function resolveWorldMovement(
         const gradLen = Math.hypot(gradX, gradZ);
 
         let slid = false;
-        if (gradLen > 0.05) {
+        if (cliffMaskBlocked) {
+          // Axis-separated tangential slide against solid Blender cliff mask
+          const tryX = !isPointBlockedByCliffMask(next.x + dirX * probeDist * 0.6, cz) && !isPointBlockedByCliffMask(next.x, cz);
+          const tryZ = !isPointBlockedByCliffMask(cx, next.z + dirZ * probeDist * 0.6) && !isPointBlockedByCliffMask(cx, next.z);
+          if (tryX && Math.abs(next.x - cx) >= Math.abs(next.z - cz)) {
+            next = enforceGatesAndBounds(next.x, cz, cx, cz);
+            slid = true;
+          } else if (tryZ) {
+            next = enforceGatesAndBounds(cx, next.z, cx, cz);
+            slid = true;
+          }
+        } else if (gradLen > 0.05) {
           const nxGrad = gradX / gradLen;
           const nzGrad = gradZ / gradLen;
           const intoWall = (next.x - cx) * nxGrad + (next.z - cz) * nzGrad;
@@ -956,7 +1025,10 @@ export function resolveWorldMovement(
             const slideDist = Math.hypot(slideX - cx, slideZ - cz);
             if (slideDist > 0.0005) {
               const sH = sampleIslandHeight(slideX, slideZ);
-              if (sH - curH <= COLLISION_TUNING.MAX_SLOPE_RISE_PER_M * slideDist) {
+              if (
+                !isPointBlockedByCliffMask(slideX, slideZ) &&
+                sH - curH <= COLLISION_TUNING.MAX_SLOPE_RISE_PER_M * slideDist
+              ) {
                 next = enforceGatesAndBounds(slideX, slideZ, cx, cz);
                 slid = true;
               }

@@ -4,7 +4,16 @@
  */
 
 export type ItemCategory = 'resource' | 'food' | 'water' | 'tool' | 'light' | 'story' | 'placeable';
-export type ToolKind = 'axe' | 'pick' | 'spear' | 'torch' | 'machete' | 'lantern';
+export type ToolKind =
+  | 'axe'
+  | 'pick'
+  | 'spear'
+  | 'torch'
+  | 'machete'
+  | 'lantern'
+  | 'bow'
+  | 'flare_gun'
+  | 'fire_bomb';
 export type CraftTier = 1 | 2 | 3; // 1 Primitive, 2 Improved, 3 Advanced
 export type CraftStation = 'hands' | 'campfire' | 'workbench' | 'forge';
 
@@ -80,6 +89,12 @@ export type ItemId =
   | 'climbing_gear'
   | 'river_raft'
   | 'station_keycard'
+  // Combat weapons & ammo
+  | 'bow'
+  | 'arrow'
+  | 'fire_bomb'
+  | 'flare_gun'
+  | 'flare_ammo'
   // Placeables
   | 'campfire_kit'
   | 'shelter_kit';
@@ -201,6 +216,47 @@ export interface SurvivalStats {
   distanceTravelled: number;
   deaths: number;
   playTimeSec: number;
+  bossFightTimeSec: number;
+}
+
+export type BossDifficulty = 'easy' | 'normal' | 'hard';
+export type BossPhase = 1 | 2 | 3;
+export type BossCombatPhase =
+  | 'inactive'
+  | 'intro'
+  | 'phase1'
+  | 'phase2_cutscene'
+  | 'phase2'
+  | 'phase3_transition'
+  | 'phase3_boat'
+  | 'defeat_cutscene'
+  | 'ended';
+
+export interface BossShadeState {
+  id: string;
+  alive: boolean;
+  hp: number;
+  maxHp: number;
+  x: number;
+  z: number;
+}
+
+export interface BossEncounterState {
+  combatPhase: BossCombatPhase;
+  phase: BossPhase;
+  difficulty: BossDifficulty;
+  hp: number;
+  maxHp: number;
+  shielded: boolean;
+  staggeredSec: number;
+  auraFlaring: boolean;
+  crystalsAlive: [boolean, boolean, boolean];
+  barrelsIntact: [boolean, boolean, boolean, boolean];
+  shades: BossShadeState[];
+  fightElapsedSec: number;
+  checkpointPhase: BossPhase;
+  defeated: boolean;
+  subtitleText: string | null;
 }
 
 export interface PlacedCampfire {
@@ -409,6 +465,9 @@ export interface SurvivalState {
   wildlife: WildlifeEntity[];
   boat: BoatBuildState;
   voyage: VoyageState;
+  bossDifficulty: BossDifficulty;
+  boss: BossEncounterState;
+  achievements: string[];
   escapedCity: boolean;
   escapedAtDay?: number;
   discoveredCells: string[];

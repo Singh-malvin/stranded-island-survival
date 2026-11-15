@@ -17,10 +17,11 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { BOAT, VOYAGE } from '../survival/config.ts';
+import { BOAT, BOSS_TUNING, VOYAGE } from '../survival/config.ts';
 import { countItem, ITEM_DEFS } from '../survival/items.ts';
 import {
   BoatStageId,
+  BossDifficulty,
   InventorySlot,
   SurvivalState,
   VoyageThrottle,
@@ -50,6 +51,7 @@ interface BoatVoyageModalProps {
   onResumeLeg: () => void;
   onReturnToDock: () => void;
   onConsumeItemSlot: (slotIndex: number) => void;
+  onChangeBossDifficulty?: (diff: BossDifficulty) => void;
 }
 
 function findConsumableSlots(inventory: (InventorySlot | null)[]) {
@@ -95,6 +97,7 @@ export const BoatVoyageModal: React.FC<BoatVoyageModalProps> = ({
   onResumeLeg,
   onReturnToDock,
   onConsumeItemSlot,
+  onChangeBossDifficulty,
 }) => {
   const v = state.voyage;
 
@@ -554,16 +557,44 @@ export const BoatVoyageModal: React.FC<BoatVoyageModalProps> = ({
             );
           })}
 
-          <div className="rounded-lg border border-stone-800 bg-stone-900/60 p-3 text-xs text-stone-400">
+          <div className="mb-2 rounded-lg border border-stone-800 bg-stone-900/60 p-3 text-xs text-stone-400">
             <div className="flex items-center gap-2 font-semibold text-stone-200">
               <Compass className="h-4 w-4 text-cyan-400" />
               Captain&apos;s Crossing Advice
             </div>
             <p className="mt-1">
               Pack extra <strong>Planks / Pine Resin</strong> (hull repairs in storms), <strong>Diesel
-              Jerrycans</strong>, and clean food &amp; water in your backpack before casting off. Three
-              uncharted stopover islets await along the 12.0 nm route.
+              Jerrycans</strong>, and crafted weapons (<strong>Bow, Arrows, Fire Bombs, Flare Gun</strong>)
+              before casting off. {!state.boss.defeated && 'The island’s ruler, The Aura King, guards the reef exit.'}
             </p>
+            {!state.boss.defeated && onChangeBossDifficulty && (
+              <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-stone-800 pt-2">
+                <span className="text-[11px] font-semibold text-purple-300">
+                  Showdown Difficulty:
+                </span>
+                <div className="flex gap-1.5">
+                  {(['easy', 'normal', 'hard'] as const).map((diff) => {
+                    const active = (state.bossDifficulty ?? 'normal') === diff;
+                    const cfg = BOSS_TUNING.DIFFICULTIES[diff];
+                    return (
+                      <button
+                        key={diff}
+                        type="button"
+                        onClick={() => onChangeBossDifficulty(diff)}
+                        className={`rounded px-2.5 py-1 text-[10.5px] font-bold transition ${
+                          active
+                            ? 'bg-purple-600 text-white shadow'
+                            : 'bg-stone-800 text-stone-300 hover:bg-stone-700'
+                        }`}
+                        title={cfg.description}
+                      >
+                        {cfg.label.split(' / ')[1] ?? diff}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -587,12 +618,16 @@ export const BoatVoyageModal: React.FC<BoatVoyageModalProps> = ({
               onClick={onLaunchVoyage}
               className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-bold ${
                 readyToSail
-                  ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400'
+                  ? state.boss.defeated
+                    ? 'bg-emerald-500 text-stone-950 hover:bg-emerald-400'
+                    : 'bg-gradient-to-r from-purple-500 to-amber-500 text-stone-950 hover:from-purple-400 hover:to-amber-400'
                   : 'bg-stone-800 text-stone-500 cursor-not-allowed'
               }`}
             >
               <Ship className="h-4 w-4" />
-              Cast Off for Port Solis (12 nm)
+              {state.boss.defeated
+                ? 'Cast Off for Port Solis (12 nm)'
+                : 'Cast Off & Confront The Aura King'}
             </button>
           </div>
         </div>

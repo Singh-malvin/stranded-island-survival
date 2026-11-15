@@ -1,7 +1,8 @@
 // Versioned save/load persistence, Stage 2 migration, autosave stamps,
 // and sleeping in a shelter bed (advance night, heal, update respawn point, save).
 
-import { INVENTORY, NEEDS, SAVE, TIME, WORLD } from './config.ts';
+import { INVENTORY, NEEDS, SAVE, TEMPERATURE, TIME, WORLD } from './config.ts';
+import { createInitialBossState, normalizeBossState } from './boss.ts';
 import { tickNodeRespawns } from './gathering.ts';
 import { stepWeather } from './needs.ts';
 import { tickStructuresProduction } from './structures.ts';
@@ -66,8 +67,18 @@ export function parseAndMigrateSave(rawJson: string): SurvivalState | null {
         ? parsed.discoveredCells
         : revealMapAround([], player.x, player.z);
 
+    const savedVersion = typeof parsed.version === 'number' ? parsed.version : 1;
+    const rawTemp = Number(parsed.needs.temperature ?? TEMPERATURE.NORMAL_BODY_C);
+    const saveDay = Number(parsed.clock.day ?? 1);
+    const migratedTemp =
+      savedVersion < SAVE.VERSION || !Number.isFinite(rawTemp)
+        ? TEMPERATURE.NORMAL_BODY_C
+        : saveDay <= 1
+          ? Math.max(TEMPERATURE.DAY1_MIN_BODY_C, Math.min(TEMPERATURE.MAX_BODY_C, rawTemp))
+          : Math.max(TEMPERATURE.MIN_BODY_C, Math.min(TEMPERATURE.MAX_BODY_C, rawTemp));
+
     return {
-      version: typeof parsed.version === 'number' ? parsed.version : 1,
+      version: SAVE.VERSION,
       act: parsed.act ?? 1,
       difficulty: parsed.difficulty === 'hardcore' ? 'hardcore' : 'survivor',
       needs: {
@@ -75,7 +86,7 @@ export function parseAndMigrateSave(rawJson: string): SurvivalState | null {
         hunger: Number(parsed.needs.hunger ?? NEEDS.START.hunger),
         thirst: Number(parsed.needs.thirst ?? NEEDS.START.thirst),
         stamina: Number(parsed.needs.stamina ?? NEEDS.START.stamina),
-        temperature: Number(parsed.needs.temperature ?? NEEDS.START.temperature),
+        temperature: migratedTemp,
         wetness: Number(parsed.needs.wetness ?? 0),
         sickness: Number(parsed.needs.sickness ?? 0),
       },
@@ -122,6 +133,19 @@ export function parseAndMigrateSave(rawJson: string): SurvivalState | null {
             ...parsed.voyage,
           }
         : createInitialVoyageState(),
+      bossDifficulty:
+        parsed.bossDifficulty === 'easy' || parsed.bossDifficulty === 'hard'
+          ? parsed.bossDifficulty
+          : 'normal',
+      boss: parsed.boss
+        ? normalizeBossState(
+            parsed.boss,
+            parsed.bossDifficulty === 'easy' || parsed.bossDifficulty === 'hard'
+              ? parsed.bossDifficulty
+              : 'normal'
+          )
+        : createInitialBossState('normal'),
+      achievements: Array.isArray(parsed.achievements) ? parsed.achievements : [],
       escapedCity: Boolean(parsed.escapedCity),
       escapedAtDay: typeof parsed.escapedAtDay === 'number' ? parsed.escapedAtDay : undefined,
       discoveredCells,
@@ -134,6 +158,7 @@ export function parseAndMigrateSave(rawJson: string): SurvivalState | null {
         distanceTravelled: Number(parsed.stats?.distanceTravelled ?? 0),
         deaths: Number(parsed.stats?.deaths ?? 0),
         playTimeSec: Number(parsed.stats?.playTimeSec ?? 0),
+        bossFightTimeSec: Number(parsed.stats?.bossFightTimeSec ?? 0),
       },
       lastSavedAt: typeof parsed.lastSavedAt === 'number' ? parsed.lastSavedAt : null,
       lastSaveKind: parsed.lastSaveKind ?? null,
@@ -246,7 +271,7 @@ export function sleepAtShelter(
     thirst: Math.max(0, state.needs.thirst - NEEDS.SLEEP_THIRST_COST),
     stamina: 100,
     wetness: Math.max(0, state.needs.wetness - 45),
-    temperature: Math.min(37.2, Math.max(state.needs.temperature, 36.8)),
+    temperature: Math.min(37.2, Math.max(state.needs.temperature, TEMPERATURE.NORMAL_BODY_C)),
     sickness: Math.max(0, state.needs.sickness - 25),
   };
 

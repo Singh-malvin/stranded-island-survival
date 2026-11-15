@@ -63,7 +63,7 @@ export const STORY_CLUES: StoryClueDef[] = [
     propKind: 'journal_book',
     summary: 'Salt-stiffened waterproof notebook tucked under a collapsed tarpaulin frame.',
     logText:
-      'Entries by survey engineer Mara Chen: "Month 3. Wild razorback boars and pit vipers own the plateau after dusk — hunt with a spear and carry herbal poultices. Station 3 up on the caldera still has a dormant shortwave tower, but we dropped the security keycard out at the eastern stone ruins before abandoning camp."',
+      'Entries by survey engineer Mara Chen: "Month 3. At dusk, a crown of purple stormlight flickers along the high basalt ridge — the locals called him the King. Nobody who launched from the south cove ever cleared his squall line. Station 3 up on the caldera still has a shortwave tower, and we dropped the keycard out at the eastern stone ruins before abandoning camp."',
   },
   {
     id: 'clue_tail_blackbox',
@@ -75,46 +75,46 @@ export const STORY_CLUES: StoryClueDef[] = [
     propKind: 'black_box',
     summary: 'Scorched orange cockpit voice & avionics pod nestled among shattered canopy trunks.',
     logText:
-      'Recovered avionics diagnostics: intact circuit modules and aviation diesel drums lie scattered around the tail impact clearing and research ridge. With high-grade smelted alloy and copper wire from the western basalt caves, the Station 3 transceiver can signal sea lanes.',
+      'Recovered black-box telemetry: Flight 404 encountered an impossible localized amethyst vortex dead above the caldera — clear sky turning into violent lightning in 12 seconds. Salvage circuit boards, diesel drums, and signal flare components before confronting whatever commands the storm.',
   },
 
   // --- ACT 3 CLUES ---
   {
     id: 'clue_cave_note',
-    title: "Miner's Lamp & Copper Log",
+    title: "Miner's Lamp & Glowing Aura Glyphs",
     subtitle: 'Western Basalt Caves — Grotto Floor',
     act: 3,
     x: WORLD.CAVE_GROTTO_POS.x + 2.4,
     z: WORLD.CAVE_GROTTO_POS.z + 2.0,
     propKind: 'cave_note',
-    summary: 'Charcoal-scrawled tally sheet beside copper conduits in the dark basalt amphitheater.',
+    summary: 'Charcoal tally sheet wedged beside strange violet-gold runes pulsing in wet basalt.',
     logText:
-      'Cave cold seeps through wet basalt stone — carry a pitch torch or brass resin lantern when delving deep. The survey team pulled thick copper wire conduits along these volcanic veins before evacuating north to Station 3.',
+      'The survey team carved warning marks next to glowing reef-coral sigils etched into the rock: "When the King’s aura dims after a slam, strike with everything you have — fire bombs and magnesium flares tear through his storm shroud!" Collect thick copper wire from these conduits.',
   },
   {
     id: 'clue_ruins_tablet',
-    title: 'Overgrown Ruins Altar & Keycard',
+    title: 'Overgrown Aura Altar & Keycard',
     subtitle: 'Ancient Stone Ruins — Northeast Cliffs',
     act: 3,
     x: WORLD.ANCIENT_RUINS_POS.x,
     z: WORLD.ANCIENT_RUINS_POS.z + 2.2,
     propKind: 'stone_tablet',
-    summary: 'Carved basalt plinth cradling a mud-caked laminated Station 3 Keycard.',
+    summary: 'Carved basalt plinth cradling glowing purple-gold runes and Dr. Patel’s keycard.',
     logText:
-      'An older pre-survey sanctuary reclaimed by jungle roots. Resting atop the altar slab is Dr. H. Patel\'s magnetic Station 3 Security Keycard — enough to unlock the perimeter fence climbing northwest toward the Caldera Radio Tower.',
+      'Ancient sanctuary to the Aura King: "He rules tide, basalt, and tempest; three reef-crystal monoliths lock his shield until shattered." Resting beside the pulsing inscription lies Dr. H. Patel’s Station 3 Security Keycard — enough to open the northern caldera gate.',
     grantsItem: { itemId: 'station_keycard', count: 1 },
   },
   {
     id: 'clue_station_log',
-    title: "Dr. Patel's Evacuation Tape",
+    title: "Dr. Patel's Evacuation & Sovereign Tape",
     subtitle: 'Station 3 Radio Compound — Caldera Ridge',
     act: 3,
     x: WORLD.RESEARCH_STATION_POS.x + 3.5,
     z: WORLD.RESEARCH_STATION_POS.z + 4.8,
     propKind: 'station_log',
-    summary: 'Laminated checklist taped onto the steel radio hut door.',
+    summary: 'Laminated checklist taped onto the steel radio hut door beside scorched headphones.',
     logText:
-      'Protocol for offshore departure: 1) Wire the shortwave Radio Transceiver (2x Copper Wire + 1x Circuit Board). 2) Fuel and rebuild the Diesel Generator (1x Diesel Jerrycan + 2x Alloy Ingots + 2x Scrap Metal). 3) Activate the Nautical Chart Table to pinpoint the deep-water channel toward Port Solis (the mainland city)!',
+      'Protocol for departure: 1) Wire the Radio Transceiver (beware the sovereign voice bleeding through static on band 4). 2) Repair the Generator & Nautical Chart Table. 3) Craft a Hunting Bow, Fire Bombs, and Signal Flare Gun before finishing the boat — the Aura King blocks anyone trying to sail past the reef.',
   },
 ];
 
@@ -270,11 +270,14 @@ export function repairStationSystem(
         ...state.flags,
         [`repaired_${partId}`]: true,
         ...(allComplete ? { act3_complete: true } : {}),
+        ...(partId === 'radio' ? { heard_boss_radio_static: true } : {}),
       },
     },
     message: allComplete
-      ? 'Sea Chart Online! Shipping lane toward Port Solis (the mainland city) pinned — Act 3 Complete! Prepare for Escape in Act 4.'
-      : `Repaired ${def.name}! Station systems coming online.`,
+      ? 'Sea Chart Online! Shipping lane toward Port Solis locked — Act 3 Complete! Prepare for Escape in Act 4.'
+      : partId === 'radio'
+        ? 'Shortwave Radio Online! Static cuts in: "...NO ONE LEAVES MY ISLAND..." — The Aura King awaits at the western cliff sanctum.'
+        : `Repaired ${def.name}! Station systems coming online.`,
   };
 }
 
@@ -526,44 +529,47 @@ export function evaluateAct4Objectives(state: SurvivalState): ObjectiveStep[] {
       act: 4,
       title: `Boat Stage 4: ${BOAT_STAGE_DEFS.nav_provisions.name}`,
       detail:
-        'Load diesel fuel, sterilized water bottles, and 3x preserved rations, then Cast Off toward Shoal Cay!',
+        'Load diesel fuel, sterilized water bottles, and 3x preserved rations, then Cast Off — be ready to face The Aura King!',
       progressText: b.nav_provisions ? 'Stocked' : 'Stage 4/4',
       completed: b.nav_provisions,
     },
     {
-      id: 'act4_voyage_out',
+      id: 'act4_boss_shore',
       act: 4,
-      title: 'Sail Beyond the Reef & Stopover Islets (0 → 8.5 nm)',
+      title: 'Confront The Aura King',
       detail:
-        'Launch from the Dock, scavenge supplies at Shoal Cay & Castaway Atoll, and push into the final storm crossing.',
-      progressText: `${v.distanceNm.toFixed(1)} / ${VOYAGE.FINAL_ACT5_NM} nm`,
-      completed: v.distanceNm >= VOYAGE.FINAL_ACT5_NM || state.escapedCity,
+        'Attempt to launch from the Boat Slipway and shatter the Aura King’s reef shield to force your escape across the storm.',
+      progressText: state.boss?.defeated
+        ? 'Vanquished'
+        : state.boss?.phase === 3
+          ? 'Pursuit at Sea'
+          : `${Math.round((state.boss?.hp ?? 1) / Math.max(1, state.boss?.maxHp ?? 1) * 100)}% HP`,
+      completed: state.boss?.defeated || v.distanceNm >= VOYAGE.FINAL_ACT5_NM || state.escapedCity,
     },
   ];
 }
 
 export function evaluateAct5Objectives(state: SurvivalState): ObjectiveStep[] {
   const v = state.voyage;
-  const reachedBeacon =
-    v.visitedStops.includes('lighthouse_shoal') ||
-    v.distanceNm >= 9.6 ||
-    state.escapedCity;
+  const defeatedBoss = Boolean(state.boss?.defeated || state.flags?.boss_lavans_defeated);
   return [
     {
-      id: 'act5_lighthouse',
+      id: 'act5_boss_storm',
       act: 5,
-      title: 'Weather the Squall & Anchor at Lighthouse Shoal (9.6 nm)',
+      title: 'Defeat The Aura King on the Escape Boat',
       detail:
-        'Brace Hull during heavy squalls, patch planks if needed, and scavenge the outer channel lighthouse rock.',
-      progressText: reachedBeacon ? 'Reached' : `${v.distanceNm.toFixed(1)} / 9.6 nm`,
-      completed: reachedBeacon,
+        'Weather the roaring storm on deck, strike with Flare Gun, Fire Bombs, and Heavy Attacks, and break the Aura King forever!',
+      progressText: defeatedBoss
+        ? 'Aura Shattered'
+        : `${Math.round((state.boss?.hp ?? 1) / Math.max(1, state.boss?.maxHp ?? 1) * 100)}% HP`,
+      completed: defeatedBoss || state.escapedCity,
     },
     {
       id: 'act5_city_harbor',
       act: 5,
-      title: 'Make Port Solis Harbor (12.0 nm)',
+      title: 'Sail to Port Solis Harbor at Sunrise',
       detail:
-        'Steer past the final channel breakers and enter the illuminated mainland city harbor.',
+        'With the storm cleared and the island freed, guide the vessel into the glowing mainland city harbor.',
       progressText: state.escapedCity ? 'Arrived!' : `${v.distanceNm.toFixed(1)} / 12.0 nm`,
       completed: state.escapedCity,
     },
@@ -705,6 +711,12 @@ export function computeMilestones(state: SurvivalState): SurvivalMilestone[] {
       title: 'Open Horizon',
       description: 'Built the Escape Boat or reached Port Solis.',
       unlocked: state.escapedCity || state.act >= 5,
+    },
+    {
+      id: 'ms_dethroned',
+      title: 'Dethroned the Aura King',
+      description: 'Defeated The Aura King in battle and broke the storm gripping the island.',
+      unlocked: Boolean(state.boss?.defeated || state.flags?.boss_lavans_defeated),
     },
   ];
 }

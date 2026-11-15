@@ -131,6 +131,15 @@ export interface ControlKeybinds {
   sit: string;
   interact: string;
   inspect: string;
+  consume: string;
+  build: string;
+  dodge: string;
+  block: string;
+  throwBomb: string;
+  inventory: string;
+  craft: string;
+  journal: string;
+  map: string;
   photoMode: string;
 }
 
@@ -146,6 +155,15 @@ export const DEFAULT_KEYBINDS: ControlKeybinds = {
   sit: 'KeyX',
   interact: 'KeyE',
   inspect: 'KeyF',
+  consume: 'KeyG',
+  build: 'KeyB',
+  dodge: 'KeyQ',
+  block: 'KeyV',
+  throwBomb: 'KeyR',
+  inventory: 'KeyI',
+  craft: 'Tab',
+  journal: 'KeyJ',
+  map: 'KeyM',
   photoMode: 'KeyP',
 };
 

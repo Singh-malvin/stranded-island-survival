@@ -17,6 +17,13 @@ export interface InteriorLandmarksHandle {
   stationSystems: Map<StationRepairId, StationSystemMeshRecord>;
   radioTowerBeacon: THREE.Mesh;
   caveCrystalLights: THREE.PointLight[];
+  groups: {
+    campGroup: THREE.Group;
+    tailGroup: THREE.Group;
+    caveGroup: THREE.Group;
+    ruinsGroup: THREE.Group;
+    stationGroup: THREE.Group;
+  };
 }
 
 export function buildInteriorLandmarks(
@@ -283,7 +290,18 @@ export function buildInteriorLandmarks(
     });
   });
 
-  return { stationSystems, radioTowerBeacon, caveCrystalLights };
+  return {
+    stationSystems,
+    radioTowerBeacon,
+    caveCrystalLights,
+    groups: {
+      campGroup,
+      tailGroup,
+      caveGroup,
+      ruinsGroup,
+      stationGroup,
+    },
+  };
 }
 
 export function syncStationSystemsVisuals(
@@ -303,74 +321,89 @@ export function buildExtraGatherNodeMesh(type: GatherNodeType): THREE.Group | nu
 
   switch (type) {
     case 'resin_tree': {
-      const barkMat = new THREE.MeshStandardMaterial({ color: 0x4b3621, roughness: 0.9 });
-      const pineMat = new THREE.MeshStandardMaterial({ color: 0x1e4d2b, roughness: 0.8, flatShading: true });
+      const barkMat = new THREE.MeshStandardMaterial({ color: 0x4b3621, roughness: 0.92, flatShading: true });
+      const boughMat = new THREE.MeshStandardMaterial({ color: 0x4d5c2b, roughness: 0.84, flatShading: true });
       const amberMat = new THREE.MeshStandardMaterial({
-        color: 0xf59e0b,
-        emissive: 0xb45309,
-        emissiveIntensity: 0.25,
+        color: 0xd97706,
+        emissive: 0x92400e,
+        emissiveIntensity: 0.18,
         roughness: 0.35,
       });
-      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.38, 5.2, 7), barkMat);
-      trunk.position.y = 2.6;
+      // Gnarled tropical acacia/resinwood trunk + spreading boughs (no blocky green pine cones!)
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.34, 4.4, 7), barkMat);
+      trunk.position.y = 2.2;
+      trunk.rotation.z = 0.05;
       group.add(trunk);
-      for (let tier = 0; tier < 3; tier++) {
-        const cone = new THREE.Mesh(new THREE.ConeGeometry(2.0 - tier * 0.4, 2.3, 7), pineMat);
-        cone.position.y = 3.6 + tier * 1.45;
-        group.add(cone);
-      }
-      const sap = new THREE.Mesh(new THREE.SphereGeometry(0.18, 6, 6), amberMat);
-      sap.position.set(0.28, 1.35, 0.12);
-      sap.scale.set(0.9, 1.4, 0.9);
+      const branchAngles = [0.2, 2.3, 4.4];
+      branchAngles.forEach((ba, idx) => {
+        const bough = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.15, 2.2, 6), barkMat);
+        bough.position.set(Math.cos(ba) * 0.65, 4.1 + idx * 0.25, Math.sin(ba) * 0.65);
+        bough.rotation.set(Math.sin(ba) * 0.62, 0, -Math.cos(ba) * 0.62);
+        group.add(bough);
+        for (let k = 0; k < 5; k++) {
+          const fa = (k / 5) * Math.PI * 2 + ba;
+          const frond = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.05, 1.35), boughMat);
+          frond.position.set(
+            Math.cos(ba) * 1.15 + Math.sin(fa) * 0.55,
+            4.85 + idx * 0.28,
+            Math.sin(ba) * 1.15 + Math.cos(fa) * 0.55
+          );
+          frond.rotation.set(-0.22, fa, 0);
+          group.add(frond);
+        }
+      });
+      const sap = new THREE.Mesh(new THREE.DodecahedronGeometry(0.16, 0), amberMat);
+      sap.position.set(0.24, 1.35, 0.12);
+      sap.scale.set(0.8, 1.45, 0.8);
       group.add(sap);
       return group;
     }
 
     case 'herb_patch': {
-      const leafMat = new THREE.MeshStandardMaterial({ color: 0x10b981, roughness: 0.72 });
-      const flowerMat = new THREE.MeshStandardMaterial({ color: 0xfde047, roughness: 0.5 });
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
-        const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.55, 0.06), leafMat);
-        leaf.position.set(Math.cos(a) * 0.22, 0.25, Math.sin(a) * 0.22);
-        leaf.rotation.set(Math.sin(a) * 0.45, a, -Math.cos(a) * 0.45);
+      const leafMat = new THREE.MeshStandardMaterial({ color: 0x5c7a38, roughness: 0.78 });
+      const flowerMat = new THREE.MeshStandardMaterial({ color: 0xeab308, roughness: 0.55 });
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + (i % 2) * 0.2;
+        const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.52, 4), leafMat);
+        leaf.position.set(Math.cos(a) * 0.2, 0.2, Math.sin(a) * 0.2);
+        leaf.rotation.set(Math.sin(a) * 0.52, a, -Math.cos(a) * 0.52);
         group.add(leaf);
       }
-      const bloom = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 6), flowerMat);
-      bloom.position.y = 0.46;
+      const bloom = new THREE.Mesh(new THREE.DodecahedronGeometry(0.08, 0), flowerMat);
+      bloom.position.y = 0.36;
       group.add(bloom);
       return group;
     }
 
     case 'iron_vein': {
-      const rockMat = new THREE.MeshStandardMaterial({ color: 0x44403c, roughness: 0.92, flatShading: true });
-      const oreMat = new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.5, metalness: 0.55 });
-      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(1.0, 0), rockMat);
-      rock.position.y = 0.52;
-      rock.scale.set(1.25, 0.85, 1.1);
+      const rockMat = new THREE.MeshStandardMaterial({ color: 0x3b3532, roughness: 0.94, flatShading: true });
+      const oreMat = new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.48, metalness: 0.55 });
+      const rock = new THREE.Mesh(new THREE.CylinderGeometry(0.68, 1.08, 1.15, 7), rockMat);
+      rock.position.y = 0.48;
+      rock.rotation.y = 0.4;
       group.add(rock);
       for (let i = 0; i < 4; i++) {
-        const chunk = new THREE.Mesh(new THREE.OctahedronGeometry(0.22, 0), oreMat);
-        chunk.position.set((i - 1.5) * 0.35, 0.72, (i % 2 === 0 ? 1 : -1) * 0.42);
+        const chunk = new THREE.Mesh(new THREE.OctahedronGeometry(0.2, 0), oreMat);
+        chunk.position.set((i - 1.5) * 0.32, 0.68, (i % 2 === 0 ? 1 : -1) * 0.38);
         group.add(chunk);
       }
       return group;
     }
 
     case 'copper_vein': {
-      const rockMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85, flatShading: true });
+      const rockMat = new THREE.MeshStandardMaterial({ color: 0x26292e, roughness: 0.9, flatShading: true });
       const wireMat = new THREE.MeshStandardMaterial({
-        color: 0xea580c,
-        emissive: 0x9a3412,
-        emissiveIntensity: 0.3,
-        roughness: 0.35,
-        metalness: 0.7,
+        color: 0xd97706,
+        emissive: 0x7c2d12,
+        emissiveIntensity: 0.2,
+        roughness: 0.38,
+        metalness: 0.68,
       });
-      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.9, 0), rockMat);
-      rock.position.y = 0.45;
+      const rock = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.98, 1.05, 7), rockMat);
+      rock.position.y = 0.42;
       group.add(rock);
-      const spool = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.08, 6, 12), wireMat);
-      spool.position.set(0.32, 0.75, 0.35);
+      const spool = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.075, 6, 12), wireMat);
+      spool.position.set(0.32, 0.72, 0.35);
       spool.rotation.x = 0.6;
       group.add(spool);
       return group;
@@ -458,16 +491,27 @@ export function buildStoryCluePropMesh(clue: StoryClueDef): THREE.Group {
     box.position.y = 0.21;
     group.add(box);
   } else if (clue.propKind === 'stone_tablet') {
+    // Weathered basalt keycard tablet & brass clasp resting on altar (no bright light-blue placeholder slab!)
     const keycard = new THREE.Mesh(
-      new THREE.BoxGeometry(0.38, 0.04, 0.26),
+      new THREE.BoxGeometry(0.34, 0.03, 0.22),
       new THREE.MeshStandardMaterial({
-        color: 0x38bdf8,
-        emissive: 0x0284c7,
-        emissiveIntensity: 0.45,
+        color: 0x334155,
+        roughness: 0.42,
+        metalness: 0.65,
       })
     );
-    keycard.position.y = 1.12;
+    keycard.position.y = 1.07;
     group.add(keycard);
+    const inlay = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.034, 0.06),
+      new THREE.MeshStandardMaterial({
+        color: 0xd97706,
+        roughness: 0.35,
+        metalness: 0.85,
+      })
+    );
+    inlay.position.set(0.04, 1.072, 0.04);
+    group.add(inlay);
   } else {
     const stake = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 1.55, 6), metalMat);
     stake.position.y = 0.75;

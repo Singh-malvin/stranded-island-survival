@@ -39,7 +39,7 @@ export const TIME = {
 // PLAYER NEEDS (balanced, not punishing)
 // ---------------------------------------------------------------------------
 export const NEEDS = {
-  START: { health: 85, hunger: 70, thirst: 55, stamina: 100, temperature: 36.4 },
+  START: { health: 85, hunger: 70, thirst: 55, stamina: 100, temperature: 37.0 },
 
   /** Hunger lost per real minute (100 → 0 in ~40 real minutes ≈ 2 in-game days). */
   HUNGER_DRAIN_PER_MIN: 2.5,
@@ -99,43 +99,69 @@ export const TEMPERATURE = {
   HYPOTHERMIA_C: 34.5,
   /** Above this body temp the player takes heat damage (heatstroke). */
   HEATSTROKE_C: 39.2,
-  /** "Cold" feedback (frost vignette, visible breath) starts below this. */
-  COLD_FEEDBACK_C: 36.0,
+  /** "Cold" feedback (frost vignette, visible breath) starts below Chilly (< 35.5°C). */
+  COLD_FEEDBACK_C: 35.5,
   /** Health lost per real minute per °C below HYPOTHERMIA_C. */
   COLD_DAMAGE_PER_MIN_PER_DEG: 7,
   HEAT_DAMAGE_PER_MIN_PER_DEG: 5,
-  /** How quickly body temp moves toward its target (fraction per real second). */
-  BODY_DRIFT_RATE: 0.032,
   /** Direct core body °C boost when consuming warm/cooked food or boiled water. */
   WARM_CONSUME_BOOST_C: 0.65,
 
+  /** Explicit warming rates (°C per real second) — noticeably faster than cooling. */
+  WARM_RATE_FIRE_C_PER_SEC: 0.025, // +1.50 °C/min near campfire
+  WARM_RATE_SHELTER_C_PER_SEC: 0.015, // +0.90 °C/min inside shelter
+  WARM_RATE_TORCH_C_PER_SEC: 0.008, // +0.48 °C/min holding lit torch/lantern
+  WARM_RATE_DRY_DAY_C_PER_SEC: 0.014, // +0.84 °C/min dry warm daytime recovery
+
+  /** Explicit cooling drivers (°C per real second) for slow, realistic progression. */
+  COOL_RATE_BASE_C_PER_SEC: 0.0005, // +0.03 °C/min gentle drift floor when below comfort
+  COOL_RATE_DAY_RAIN_MAX_DROP: 2.1, // daytime rain alone never drops below ~34.9°C (Cold)
+  COOL_RATE_CLEAR_NIGHT_MAX_DROP: 2.2, // dry clear single night bottoms at ~34.8°C (Cold)
+  COOL_RATE_NIGHT_C_PER_SEC: 0.0053, // +0.318 °C/min exposed unsheltered at night -> Cold in ~4.7 min
+  COOL_RATE_RAIN_C_PER_SEC: 0.0012, // +0.072 °C/min active rain when unsheltered
+  COOL_RATE_WET_C_PER_SEC: 0.0013, // +0.078 °C/min soaked clothing when away from fire (~1°C/6.2m in rain)
+  COOL_RATE_WIND_C_PER_SEC: 0.0022, // +0.132 °C/min strong cool wind chill when unsheltered
+  COOL_RATE_SWIM_C_PER_SEC: 0.0040, // +0.240 °C/min cold ocean swimming
+  COOL_RATE_STORM_NIGHT_C_PER_SEC: 0.0020, // +0.120 °C/min soaked night gale exposure -> Severe by full ~5.8m storm night
+
+  /** Night/shelter/torch protection factors. */
+  SHELTER_NIGHT_CHILL_REDUCTION: 0.78, // shelter blocks rain/wind & cuts night chill by 78%
+  TORCH_CHILL_MITIGATION: 0.55, // lit torch/lantern cuts exposed night chill by 55%
+  NIGHT_EXPOSURE_PENALTY_C: 2.5, // additional effective cooling at night without sun/fire/shelter
+  NIGHT_INFER_AMBIENT_C: 17.0, // fallback night threshold when clock is omitted
+
+  /** Day 1 grace & clear-morning window. */
+  DAY1_CLEAR_WEATHER_HOURS: 5.0, // Day 1 07:00 -> 12:00 starts clear before weather rolls in
+  DAY1_MIN_BODY_C: 35.5, // Day 1 never drops below "Chilly" (>= 35.5°C)
+  DAYLIGHT_COMFORT_FLOOR_C: 36.6, // Normal daytime dry/cool air keeps core in 36.5–37.0°C
+
   /** Ambient air model: coldest at COLDEST_HOUR, warmest 12h later. */
-  AMBIENT_MEAN_C: 24,
-  AMBIENT_SWING_C: 10, // ±10 → ~14 °C before dawn, ~34 °C mid-afternoon
+  AMBIENT_MEAN_C: 23.0,
+  AMBIENT_SWING_C: 9.0, // ±9 → ~14 °C before dawn, ~32 °C mid-afternoon
   COLDEST_HOUR: 4,
 
   /** Comfortable ambient band — inside it body temp settles at NORMAL_BODY_C. */
-  COMFORT_MIN_C: 20,
+  COMFORT_MIN_C: 17.5,
   COMFORT_MAX_C: 33,
   /** Body target °C shift per °C of ambient outside the comfort band. */
-  COLD_TARGET_SLOPE: 0.32,
+  COLD_TARGET_SLOPE: 0.34,
   HEAT_TARGET_SLOPE: 0.15,
 
   /** Warmth bonuses (added to effective ambient °C). */
   CAMPFIRE_WARMTH_C: 18,
   CAMPFIRE_RADIUS_M: 5.5,
   TORCH_WARMTH_C: 5,
-  SHELTER_WARMTH_C: 6,
+  SHELTER_WARMTH_C: 7,
   /** Wet clothes chill effective ambient by up to this many °C at 100 wetness. */
-  WET_CHILL_C: 9,
+  WET_CHILL_C: 7.5,
   /** Direct extra body target drop (°C) when 100% soaked in cold/windy air. */
   WET_MAX_PENALTY_C: 1.8,
 
   /** Wetness gained per real second while swimming / in rain (scaled by rain intensity). */
   WETNESS_SWIM_PER_SEC: 40,
-  WETNESS_RAIN_PER_SEC: 4,
+  WETNESS_RAIN_PER_SEC: 2.5,
   /** Drying per real second (base / near fire / in hot sun). */
-  DRY_PER_SEC: 0.8,
+  DRY_PER_SEC: 1.0,
   DRY_FIRE_PER_SEC: 6,
 };
 
@@ -219,7 +245,7 @@ export const DEATH = {
   /** Fraction of each stack of *basic resources* lost on death (tools & story items kept). */
   RESOURCE_LOSS_FRACTION: 0.25,
   /** Needs you respawn with. */
-  RESPAWN_NEEDS: { health: 60, hunger: 50, thirst: 50, stamina: 100, temperature: 36.8 },
+  RESPAWN_NEEDS: { health: 60, hunger: 50, thirst: 50, stamina: 100, temperature: 37.0 },
 };
 
 // ---------------------------------------------------------------------------
@@ -262,6 +288,7 @@ export const WORLD = {
 // SAVE SYSTEM & EXPLORATION MAP
 // ---------------------------------------------------------------------------
 export const SAVE = {
+  VERSION: 2,
   STORAGE_KEY: 'stranded_survival_save_v1',
   /** Real seconds between automatic background saves while playing. */
   AUTOSAVE_REAL_SEC: 30,
@@ -631,7 +658,7 @@ export const TERRAIN_TUNING = {
   WOOD_UV_SCALE: 0.62,
   METAL_UV_SCALE: 0.35,
   /** Base 3D instanced grass blade count (scaled by quality preset grassDensity). */
-  GRASS_BLADE_BASE_COUNT: 48000,
+  GRASS_BLADE_BASE_COUNT: 24000,
   GRASS_MIN_HEIGHT: 0.22,
   GRASS_MAX_HEIGHT: 0.56,
   GRASS_WIND_SPEED: 1.85,
@@ -669,11 +696,19 @@ export const FORGE_TUNING = {
 
 export const HUD_TUNING = {
   /** Controls hint bar automatically fades away after this many seconds (toggle anytime with H). */
-  HINT_AUTO_HIDE_SEC: 180,
+  HINT_AUTO_HIDE_SEC: 4.5,
   /** Smooth fade/slide duration (ms) for menus, modals, tooltips, and prompts. */
-  UI_FADE_DURATION_MS: 200,
+  UI_FADE_DURATION_MS: 220,
   /** Duration (ms) that "+1 Item" pickup popups remain visible near the hotbar. */
-  PICKUP_TOAST_DURATION_MS: 1800,
+  PICKUP_TOAST_DURATION_MS: 1600,
+  /** Minimal HUD auto-fade thresholds & delays. */
+  VITALS_FADE_DELAY_SEC: 4.5,
+  VITALS_HEALTH_SHOW_THRESHOLD: 95,
+  VITALS_NEEDS_SHOW_THRESHOLD: 85,
+  VITALS_STAMINA_SHOW_THRESHOLD: 92,
+  COMPASS_FADE_DELAY_SEC: 5.0,
+  AREA_BANNER_DURATION_SEC: 2.6,
+  TIP_AUTO_HIDE_SEC: 4.5,
 } as const;
 
 export const IK_SWAY_TUNING = {
@@ -769,4 +804,201 @@ export const BODY_IK_TUNING = {
   EUPHORIA_FALL_FLAIL_STIFFNESS: 0.34,
   EUPHORIA_LAND_BRACE_DIST_M: 2.0,
   EUPHORIA_RECOVERY_RATE: 3.4,
+} as const;
+
+export const WORLD_VISUAL_TUNING = {
+  /** Layered Blender storm-break cloud panorama blending & drift. */
+  STORM_CLOUD_DRIFT_SPEED: 0.0022,
+  STORM_CLOUD_OPACITY: 0.96,
+  STORM_CLOUD_CONTRAST: 1.24,
+  STORM_CLOUD_SUN_RIM_BOOST: 0.44,
+
+  /** High-contrast storm-break sun lighting & canyon shadow shaping. */
+  SUN_KEY_INTENSITY_DAY: 1.78,
+  SUN_KEY_Z_BIAS_M: 26,
+  CLIFF_MICRO_DETAIL_SCALE: 0.19,
+  CLIFF_MICRO_NORMAL_STRENGTH: 0.92,
+  CLIFF_AO_INTENSITY: 0.86,
+  CLIFF_ENV_INTENSITY: 0.34,
+  TERRAIN_MACRO_BLEND_WEIGHT: 0.68,
+
+  /** Exponential valley depth haze + forward Mie sun scatter on distant cliffs. */
+  HAZE_HEIGHT_FALLOFF: 0.026,
+  HAZE_HEIGHT_DENSITY: 0.72,
+  HAZE_SUN_GLOW_POWER: 5.5,
+  HAZE_SUN_GLOW_STRENGTH: 0.42,
+
+  /** Screen-space volumetric sun shafts (god rays) breaking past cliffs & clouds. */
+  GODRAY_INTENSITY_ULTRA: 0.42,
+  GODRAY_INTENSITY_HIGH: 0.32,
+  GODRAY_INTENSITY_MEDIUM: 0.20,
+  GODRAY_DECAY: 0.94,
+  GODRAY_DENSITY: 0.84,
+  GODRAY_WEIGHT: 0.36,
+  GODRAY_SAMPLES_ULTRA: 22,
+  GODRAY_SAMPLES_HIGH: 14,
+
+  /** Chunked InstancedMesh vegetation grid, LODs & wind sway (11,601 Blender instances). */
+  VEG_CHUNK_GRID_N: 5,
+  VEG_GRASS_FADE_START_M: 42,
+  VEG_GRASS_FADE_END_M: 88,
+  VEG_SHRUB_FADE_START_M: 76,
+  VEG_SHRUB_FADE_END_M: 148,
+  VEG_FERN_LOD1_DIST_M: 52,
+  VEG_PALM_LOD1_DIST_M: 92,
+  VEG_WIND_SWAY_SPEED: 1.95,
+  VEG_WIND_SWAY_AMP: 0.085,
+  VEG_BACKLIT_TRANSLUCENCY: 0.38,
+
+  /** Terrain mesh grid resolution caps per quality preset to maintain 60 FPS Ultra. */
+  TERRAIN_SEGMENTS_LOW: 128,
+  TERRAIN_SEGMENTS_MEDIUM: 168,
+  TERRAIN_SEGMENTS_HIGH: 224,
+  TERRAIN_SEGMENTS_ULTRA: 224,
+} as const;
+
+// ---------------------------------------------------------------------------
+// COMBAT SYSTEM & WEAPON TUNING (Lavans Bali Showdown + Survival Defense)
+// ---------------------------------------------------------------------------
+export const COMBAT_TUNING = {
+  /** Hold LMB duration (sec) that upgrades a click into a charged heavy attack. */
+  HEAVY_HOLD_THRESHOLD_SEC: 0.26,
+  /** Light attack cooldown & stamina cost. */
+  LIGHT_COOLDOWN_SEC: 0.42,
+  LIGHT_STAMINA_COST: 7,
+  /** Heavy attack cooldown, damage multiplier, poise damage multiplier, stamina cost. */
+  HEAVY_COOLDOWN_SEC: 0.72,
+  HEAVY_DAMAGE_MULT: 2.05,
+  HEAVY_POISE_MULT: 2.5,
+  HEAVY_STAMINA_COST: 16,
+  /** Brief impact hit-stop freeze duration (sec) for melee/heavy punchiness. */
+  HIT_STOP_SEC: 0.042,
+
+  /** Block damage reduction & timed parry window (sec). */
+  BLOCK_DAMAGE_MULT: 0.30,
+  BLOCK_STAMINA_HIT_COST: 9,
+  PARRY_WINDOW_SEC: 0.24,
+
+  /** Dodge roll burst movement, invulnerability window, cooldown & stamina cost. */
+  DODGE_DURATION_SEC: 0.42,
+  DODGE_IFRAME_SEC: 0.34,
+  DODGE_COOLDOWN_SEC: 0.68,
+  DODGE_SPEED_MPS: 13.5,
+  DODGE_STAMINA_COST: 18,
+
+  /** Bow draw timing & projectile speeds (m/s). */
+  BOW_MAX_DRAW_SEC: 0.65,
+  BOW_MIN_DRAW_SEC: 0.16,
+  ARROW_SPEED_MPS: 44.0,
+  ARROW_GRAVITY_MPS2: 8.6,
+  FIRE_BOMB_SPEED_MPS: 21.0,
+  FLARE_SPEED_MPS: 56.0,
+  SPEAR_THROW_SPEED_MPS: 24.0,
+
+  /** Base damage by equipped item id. */
+  WEAPON_DAMAGE: {
+    bare_hands: 7,
+    stone_axe: 16,
+    stone_pick: 14,
+    machete: 24,
+    spear: 28,
+    metal_axe: 27,
+    metal_pick: 21,
+    torch: 15,
+    bow_min: 18,
+    bow_full: 48,
+    fire_bomb: 95,
+    flare_gun: 130,
+  } as const,
+} as const;
+
+// ---------------------------------------------------------------------------
+// FINAL BOSS FIGHT — LAVANS BALI, THE AURA KING
+// ---------------------------------------------------------------------------
+export const BOSS_TUNING = {
+  DISPLAY_NAME: 'THE AURA KING',
+  ACHIEVEMENT_NAME: 'Dethroned the Aura King',
+
+  /** Phase 1–2 Shore Sanctum center on the secluded Western Cliff Cove (far from Flight 404 Beach). */
+  ARENA_CENTER_X: -140,
+  ARENA_CENTER_Z: -40,
+  ARENA_RADIUS_M: 28,
+  DOCK_TRIGGER_RADIUS_M: 9.0,
+
+  /** Night cliffside silhouette foreshadowing position overlooking the central island valley (Acts 2-4). */
+  WATCHER_CLIFF_POS: { x: 26, z: -24 },
+  WATCHER_VANISH_DIST_M: 22,
+
+  /** Phase transition HP ratios. */
+  PHASE2_HP_RATIO: 0.66,
+  PHASE3_HP_RATIO: 0.33,
+
+  /** Difficulty presets scaling HP, outgoing damage, and incoming player damage. */
+  DIFFICULTIES: {
+    easy: {
+      label: 'Story / Easy',
+      description: 'More forgiving hits and faster Aura breaks.',
+      maxHp: 1350,
+      bossDmgMult: 0.65,
+      playerDmgMult: 1.25,
+      attackRateMult: 0.85,
+    },
+    normal: {
+      label: 'Survivor / Normal',
+      description: 'Intended epic multi-phase showdown (8–12 min).',
+      maxHp: 2100,
+      bossDmgMult: 1.0,
+      playerDmgMult: 1.0,
+      attackRateMult: 1.0,
+    },
+    hard: {
+      label: 'Sovereign / Hard',
+      description: 'Relentless storm aggression, lethal aura waves.',
+      maxHp: 2900,
+      bossDmgMult: 1.4,
+      playerDmgMult: 0.85,
+      attackRateMult: 1.18,
+    },
+  } as const,
+
+  /** Weak-point & environmental hazard multipliers. */
+  STAGGER_DURATION_SEC: 3.6,
+  STAGGER_DAMAGE_MULT: 1.65,
+  PHASE2_CRYSTAL_SHIELD_DR: 0.56,
+  PHASE3_FLARE_WEAKPOINT_MULT: 2.15,
+  EXPLOSIVE_BARREL_DAMAGE: 210,
+  EXPLOSIVE_BARREL_RADIUS_M: 6.2,
+  CRYSTAL_HP: 80,
+
+  /** Boss attack timings & damage values (scaled by difficulty). */
+  MELEE_WINDUP_SEC: 0.72,
+  MELEE_DAMAGE: 22,
+  MELEE_RANGE_M: 3.6,
+  SHOCKWAVE_WINDUP_SEC: 1.05,
+  SHOCKWAVE_DAMAGE: 28,
+  SHOCKWAVE_MAX_RADIUS_M: 18,
+  SHOCKWAVE_SPEED_MPS: 13.5,
+  ORB_DAMAGE: 16,
+  ORB_SPEED_MPS: 15.5,
+  ORB_COOLDOWN_SEC: 4.2,
+
+  /** Phase 2 Aura Shades & Phase 3 Boat Arena tuning. */
+  SHADE_MAX_COUNT: 3,
+  SHADE_HP: 65,
+  SHADE_SPEED_MPS: 4.3,
+  SHADE_DAMAGE: 11,
+
+  /** Cutscene & slow-mo final blow timings. */
+  INTRO_DURATION_SEC: 4.4,
+  PHASE2_CUTSCENE_SEC: 3.2,
+  PHASE3_TRANSITION_SEC: 3.4,
+  DEFEAT_CUTSCENE_SEC: 5.2,
+  FINISHER_SLOWMO_SCALE: 0.24,
+  FINISHER_SLOWMO_REAL_SEC: 1.35,
+
+  /** Pooled VFX capacities (zero per-frame heap allocation on Ultra 60 FPS). */
+  POOL_AURA_ORBS: 14,
+  POOL_SHOCKWAVES: 4,
+  POOL_PLAYER_PROJECTILES: 12,
+  POOL_VFX_PARTICLES: 160,
 } as const;

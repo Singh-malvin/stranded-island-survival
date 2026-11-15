@@ -8,10 +8,14 @@ import {
   Hammer,
   Package,
   RotateCcw,
+  Shield,
   Ship,
   Sun,
+  Swords,
+  Trophy,
 } from 'lucide-react';
-import { VOYAGE } from '../survival/config.ts';
+import { getBossDifficultyConfig } from '../survival/boss.ts';
+import { BOSS_TUNING, VOYAGE } from '../survival/config.ts';
 import { STORY_CLUES } from '../survival/quests.ts';
 import { SurvivalState } from '../survival/types.ts';
 
@@ -40,6 +44,8 @@ export const CityEndingModal: React.FC<CityEndingModalProps> = ({
 
   const daysSurvived = state.escapedAtDay ?? state.clock.day;
   const totalDistMeters = Math.round(state.stats.distanceTravelled);
+  const dethronedUnlocked = (state.achievements ?? []).includes(BOSS_TUNING.ACHIEVEMENT_NAME);
+  const bossDiffLabel = getBossDifficultyConfig(state.bossDifficulty).label;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4">
@@ -51,13 +57,19 @@ export const CityEndingModal: React.FC<CityEndingModalProps> = ({
             Act 5 Complete — Escape Ending
           </div>
           <h1 className="mt-3 text-2xl font-extrabold tracking-wide text-stone-50">
-            Port Solis Reached — You Made It Home
+            Port Solis Reached — Dawn After the Storm
           </h1>
           <p className="mt-2 text-xs leading-relaxed text-stone-300">
-            Guided by the Lighthouse Shoal beacon and the Research Station&apos;s calibrated sea chart,
-            your handmade vessel clears the breakwater at dawn. Coastguard cutters escort Flight
-            404&apos;s lone survivor into the bustling harbor lights of Port Solis.
+            With The Aura King shattered in the eye of the storm and the island&apos;s dark aura
+            broken forever, sunlight pours across a calm horizon. Guided by the Lighthouse Shoal
+            and Port Solis Coastguard cutters, Flight 404&apos;s lone survivor sails home at sunrise.
           </p>
+          {dethronedUnlocked && (
+            <div className="mx-auto mt-3 inline-flex items-center gap-2 rounded-lg border border-purple-400/60 bg-gradient-to-r from-purple-950/85 via-amber-950/65 to-purple-950/85 px-3.5 py-1.5 text-xs font-bold text-amber-200 shadow-lg">
+              <Trophy className="h-4 w-4 text-amber-400" />
+              Achievement Unlocked: &ldquo;{BOSS_TUNING.ACHIEVEMENT_NAME}&rdquo;
+            </div>
+          )}
         </div>
 
         {/* Expedition Summary Stats */}
@@ -115,12 +127,38 @@ export const CityEndingModal: React.FC<CityEndingModalProps> = ({
             <div className="rounded-xl border border-stone-800 bg-stone-900/80 p-3">
               <div className="flex items-center gap-1.5 text-[11px] text-rose-400">
                 <Ship className="h-3.5 w-3.5" />
-                Voyage Landfalls
+                Voyage &amp; Respawns
               </div>
               <div className="mt-1 text-xl font-bold text-stone-100">
                 {state.voyage.visitedStops.length} / 4 Stops
               </div>
-              <div className="text-[10px] text-stone-500">Respawns: {state.stats.deaths}</div>
+              <div className="text-[10px] text-stone-500">Deaths: {state.stats.deaths}</div>
+            </div>
+
+            <div className="rounded-xl border border-purple-800/60 bg-purple-950/35 p-3 sm:col-span-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-purple-200">
+                  <Swords className="h-4 w-4 text-amber-400" />
+                  Final Showdown — The Aura King
+                </div>
+                <span className="inline-flex items-center gap-1 rounded bg-purple-900/60 px-2 py-0.5 text-[10px] font-semibold text-purple-200">
+                  <Shield className="h-3 w-3 text-amber-300" /> {bossDiffLabel}
+                </span>
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-stone-300">
+                <span>
+                  Boss Fight Time:{' '}
+                  <strong className="text-amber-300">
+                    {formatDuration(state.stats.bossFightTimeSec ?? state.boss.fightElapsedSec ?? 0)}
+                  </strong>
+                </span>
+                <span>
+                  Outcome:{' '}
+                  <strong className="text-emerald-300">
+                    {state.boss.defeated ? 'Aura Crown Shattered' : 'Bypassed'}
+                  </strong>
+                </span>
+              </div>
             </div>
           </div>
 
@@ -132,11 +170,11 @@ export const CityEndingModal: React.FC<CityEndingModalProps> = ({
             </div>
             <p className="text-stone-300 font-semibold">Stranded — Island Survival</p>
             <p className="mt-1">
-              Atmospheric 3D Survival Engine (Three.js + WebAudio Procedural Foley + 5-Act Progression)
+              Atmospheric 3D Survival Engine · Three.js PBR + Blender Worlds + Adaptive WebAudio + Aura King Finale
             </p>
             <p className="mt-1 text-[11px] text-stone-500">
-              Converted from the Resort 3D sandbox into a full 5-act castaway survival expedition:
-              beach survival, interior exploration, station repairs, dockyard shipbuilding, and sea rescue.
+              Flight 404 Castaway Saga: Beach survival, basalt caves &amp; ancient shrine lore, research station repairs,
+              dockyard shipbuilding, and defeating The Aura King in the eye of the storm.
             </p>
           </div>
         </div>

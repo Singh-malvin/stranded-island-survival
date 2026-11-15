@@ -325,21 +325,36 @@ export function buildVoyageDiorama(scene: THREE.Scene): VoyageSceneController {
   sandbar.position.y = 0.25;
   isletGroup.add(sandbar);
 
-  const peak = new THREE.Mesh(new THREE.DodecahedronGeometry(4.8, 0), rockMat);
+  const peak = new THREE.Mesh(new THREE.DodecahedronGeometry(4.8, 1), rockMat);
   peak.position.set(-3.2, 2.2, 1.2);
-  peak.scale.set(1.2, 0.9, 1.1);
+  peak.scale.set(1.25, 1.05, 1.05);
   isletGroup.add(peak);
 
-  for (const [px, pz] of [
-    [3.5, -1.5],
-    [-1.5, -3.2],
+  const spire = new THREE.Mesh(new THREE.ConeGeometry(2.6, 5.2, 6), rockMat);
+  spire.position.set(-1.2, 2.6, 2.6);
+  spire.rotation.z = 0.14;
+  isletGroup.add(spire);
+
+  for (const [px, pz, tilt] of [
+    [3.5, -1.5, 0.14],
+    [-1.5, -3.2, -0.12],
   ]) {
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.28, 4.4, 6), trunkMat);
-    trunk.position.set(px, 2.6, pz);
-    isletGroup.add(trunk);
-    const canopy = new THREE.Mesh(new THREE.ConeGeometry(1.7, 1.4, 6), leafMat);
-    canopy.position.set(px, 4.9, pz);
-    isletGroup.add(canopy);
+    const palmCluster = new THREE.Group();
+    palmCluster.position.set(px, 0.4, pz);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.24, 4.6, 7), trunkMat);
+    trunk.position.y = 2.3;
+    trunk.rotation.z = tilt;
+    palmCluster.add(trunk);
+    const crownX = -Math.sin(tilt) * 2.1;
+    const crownY = 4.4;
+    for (let f = 0; f < 6; f++) {
+      const a = (f / 6) * Math.PI * 2;
+      const frond = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.05, 1.85), leafMat);
+      frond.position.set(crownX + Math.sin(a) * 0.9, crownY - 0.15, Math.cos(a) * 0.9);
+      frond.rotation.set(-0.34, a, 0);
+      palmCluster.add(frond);
+    }
+    isletGroup.add(palmCluster);
   }
   isletGroup.position.set(-8, 0, 26);
   isletGroup.visible = false;
@@ -434,31 +449,51 @@ export function updateVoyageDiorama(
   nowMs: number
 ) {
   const v = state.voyage;
-  const active = v.phase !== 'docked';
+  const inBossBoat =
+    state.boss.combatPhase === 'phase3_transition' ||
+    state.boss.combatPhase === 'phase3_boat' ||
+    (state.boss.phase === 3 && state.boss.combatPhase === 'defeat_cutscene');
+  const active = v.phase !== 'docked' || inBossBoat;
   ctrl.root.visible = active;
   if (!active) return;
 
   const tSec = nowMs * 0.001;
   const weather =
-    v.phase === 'sailing'
-      ? computeSeaWeatherForLeg(v.legIndex, v.distanceNm)
-      : state.weather;
-  const stormAmp = v.phase === 'stopover' || v.phase === 'arrived' ? 0.25 : 0.45 + weather.wind * 0.9;
+    inBossBoat
+      ? { kind: 'storm' as const, rain: 1, wind: 1 }
+      : v.phase === 'sailing'
+        ? computeSeaWeatherForLeg(v.legIndex, v.distanceNm)
+        : state.weather;
+  const stormAmp = inBossBoat
+    ? state.boss.combatPhase === 'defeat_cutscene'
+      ? 0.35
+      : 1.48
+    : v.phase === 'stopover' || v.phase === 'arrived'
+      ? 0.25
+      : 0.45 + weather.wind * 0.9;
 
   // Buoyant wave pitching & rolling
   ctrl.boatPivot.position.y = Math.sin(tSec * 2.1) * 0.22 * stormAmp;
   ctrl.boatPivot.rotation.z = Math.sin(tSec * 1.7) * 0.065 * stormAmp;
   ctrl.boatPivot.rotation.x = Math.cos(tSec * 2.4) * 0.045 * stormAmp;
 
-  // Outboard prop spin when motoring
-  if (v.phase === 'sailing' && v.throttle === 'motor' && v.fuelPct > 0) {
+  // Outboard prop spin when motoring & storm-furled sail so Phase 3 combat view is unobstructed
+  if (inBossBoat) {
+    ctrl.vessel.sailMesh.scale.set(1, 0.14, 1);
+    ctrl.vessel.sailMesh.position.y = 4.65;
+  } else {
+    ctrl.vessel.sailMesh.scale.set(1, 1, 1);
+    ctrl.vessel.sailMesh.position.y = 3.3;
+  }
+
+  if (inBossBoat || (v.phase === 'sailing' && v.throttle === 'motor' && v.fuelPct > 0)) {
     ctrl.vessel.propeller.rotation.z += delta * 24;
   } else if (v.phase === 'sailing') {
     ctrl.vessel.propeller.rotation.z += delta * 3.5;
   }
 
   // Wake stretch with speed
-  const moving = v.phase === 'sailing';
+  const moving = v.phase === 'sailing' || inBossBoat;
   ctrl.wakeLeft.visible = moving;
   ctrl.wakeRight.visible = moving;
   if (moving) {
@@ -479,8 +514,11 @@ export function updateVoyageDiorama(
     ctrl.isletGroup.visible = false;
   }
 
-  // Port Solis skyline appears during Act 5 (>= 8.5 nm) and draws near as you reach 12.0 nm
-  const showCity = v.distanceNm >= VOYAGE.FINAL_ACT5_NM || v.phase === 'arrived';
+  // Port Solis skyline appears during Act 5 (>= 8.5 nm), arrived, or boss defeat sunrise
+  const showCity =
+    v.distanceNm >= VOYAGE.FINAL_ACT5_NM ||
+    v.phase === 'arrived' ||
+    (state.boss.phase === 3 && state.boss.combatPhase === 'defeat_cutscene');
   ctrl.cityGroup.visible = showCity;
   if (showCity) {
     const remaining = Math.max(0, VOYAGE.TOTAL_DISTANCE_NM - v.distanceNm);

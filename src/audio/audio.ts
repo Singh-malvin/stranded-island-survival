@@ -36,6 +36,12 @@ class AudioManager {
   private captionCb: ((text: string) => void) | null = null;
   private isAmbientRunning: boolean = false;
 
+  // Boss Encounter Dynamic Music & Voice
+  private bossMusicActive: boolean = false;
+  private bossMusicPhase: 1 | 2 | 3 | 'victory' = 1;
+  private bossMusicTimer: number | null = null;
+  private bossBeatStep: number = 0;
+
   constructor() {
     // AudioContext will be initialized on first user gesture
   }
@@ -1187,6 +1193,329 @@ class AudioManager {
     f.connect(g);
     g.connect(this.masterGain);
     src.start(t);
+  }
+
+  // -------------------------------------------------------------------------
+  // BOSS FIGHT SOUND EFFECTS, ECHOING VOICE & PHASE-REACTIVE MUSIC
+  // -------------------------------------------------------------------------
+
+  public setBossMusicState(active: boolean, phase: 1 | 2 | 3 | 'victory' = 1) {
+    const phaseChanged = this.bossMusicPhase !== phase;
+    this.bossMusicActive = active;
+    this.bossMusicPhase = phase;
+    if (!active || phaseChanged) {
+      if (this.bossMusicTimer !== null && typeof window !== 'undefined') {
+        window.clearInterval(this.bossMusicTimer);
+        this.bossMusicTimer = null;
+      }
+      if (!active) return;
+    }
+    this.initContext();
+    if (this.bossMusicTimer === null && typeof window !== 'undefined') {
+      this.bossBeatStep = 0;
+      const tickMs = phase === 3 ? 210 : phase === 2 ? 250 : phase === 'victory' ? 380 : 300;
+      this.bossMusicTimer = window.setInterval(() => this.triggerBossMusicStep(), tickMs);
+    }
+  }
+
+  private triggerBossMusicStep() {
+    if (!this.bossMusicActive || !this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const step = this.bossBeatStep++;
+
+    if (this.bossMusicPhase === 'victory') {
+      if (step % 4 === 0) {
+        const chord = step % 8 === 0 ? [261.63, 329.63, 392.0] : [293.66, 369.99, 440.0];
+        chord.forEach((f) => {
+          const o = this.ctx!.createOscillator();
+          const g = this.ctx!.createGain();
+          o.type = 'sine';
+          o.frequency.setValueAtTime(f, t);
+          g.gain.setValueAtTime(0.001, t);
+          g.gain.linearRampToValueAtTime(0.045, t + 0.18);
+          g.gain.exponentialRampToValueAtTime(0.001, t + 1.15);
+          o.connect(g);
+          g.connect(this.masterGain!);
+          o.start(t);
+          o.stop(t + 1.2);
+        });
+      }
+      return;
+    }
+
+    const phase = this.bossMusicPhase;
+    // Deep war-drum pulse on downbeats
+    if (step % 2 === 0 || (phase >= 2 && step % 4 === 3)) {
+      const drum = this.ctx.createOscillator();
+      const dg = this.ctx.createGain();
+      drum.type = 'triangle';
+      const pitch = step % 4 === 0 ? 92 : 66;
+      drum.frequency.setValueAtTime(pitch, t);
+      drum.frequency.exponentialRampToValueAtTime(34, t + 0.19);
+      dg.gain.setValueAtTime(phase === 3 ? 0.22 : 0.16, t);
+      dg.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+      drum.connect(dg);
+      dg.connect(this.masterGain);
+      drum.start(t);
+      drum.stop(t + 0.24);
+    }
+
+    // D minor / Dorian menacing bass ostinato
+    const scale = [73.42, 87.31, 98.0, 110.0, 116.54, 130.81];
+    const pat = phase === 3 ? [0, 0, 4, 2, 0, 5, 4, 1] : [0, -1, 1, 2, 0, -1, 4, 3];
+    const noteIdx = pat[step % pat.length];
+    if (noteIdx >= 0) {
+      const bass = this.ctx.createOscillator();
+      const fil = this.ctx.createBiquadFilter();
+      const bg = this.ctx.createGain();
+      bass.type = 'sawtooth';
+      bass.frequency.setValueAtTime(scale[noteIdx], t);
+      fil.type = 'lowpass';
+      fil.frequency.setValueAtTime(phase === 3 ? 620 : 380, t);
+      bg.gain.setValueAtTime(0.085, t);
+      bg.gain.exponentialRampToValueAtTime(0.001, t + 0.23);
+      bass.connect(fil);
+      fil.connect(bg);
+      bg.connect(this.masterGain);
+      bass.start(t);
+      bass.stop(t + 0.25);
+    }
+
+    // Phase 2/3 tension shimmer high stabs
+    if (phase >= 2 && step % 4 === 2) {
+      const lead = this.ctx.createOscillator();
+      const lg = this.ctx.createGain();
+      lead.type = 'triangle';
+      lead.frequency.setValueAtTime(phase === 3 ? 587.33 : 440.0, t);
+      lg.gain.setValueAtTime(0.045, t);
+      lg.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+      lead.connect(lg);
+      lg.connect(this.masterGain);
+      lead.start(t);
+      lead.stop(t + 0.3);
+    }
+  }
+
+  public playMeleeSlash(isHeavy: boolean = false) {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(isHeavy ? 0.28 : 0.16);
+    if (buf) {
+      const s = this.ctx.createBufferSource();
+      s.buffer = buf;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.setValueAtTime(isHeavy ? 620 : 980, t);
+      f.frequency.exponentialRampToValueAtTime(220, t + (isHeavy ? 0.26 : 0.15));
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(isHeavy ? 0.28 : 0.19, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + (isHeavy ? 0.27 : 0.16));
+      s.connect(f);
+      f.connect(g);
+      g.connect(this.masterGain);
+      s.start(t);
+    }
+  }
+
+  public playHeavyImpact(isStagger: boolean = false) {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = isStagger ? 'sawtooth' : 'triangle';
+    o.frequency.setValueAtTime(isStagger ? 190 : 140, t);
+    o.frequency.exponentialRampToValueAtTime(36, t + 0.28);
+    g.gain.setValueAtTime(0.36, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    o.connect(g);
+    g.connect(this.masterGain);
+    o.start(t);
+    o.stop(t + 0.32);
+  }
+
+  public playParryBlock(parried: boolean = false) {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    [parried ? 1320 : 620, parried ? 1980 : 410].forEach((freq) => {
+      const o = this.ctx!.createOscillator();
+      const g = this.ctx!.createGain();
+      o.type = 'square';
+      o.frequency.setValueAtTime(freq, t);
+      o.frequency.exponentialRampToValueAtTime(freq * 0.65, t + 0.18);
+      g.gain.setValueAtTime(0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+      o.connect(g);
+      g.connect(this.masterGain!);
+      o.start(t);
+      o.stop(t + 0.22);
+    });
+  }
+
+  public playDodgeRoll() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.24);
+    if (!buf) return;
+    const s = this.ctx.createBufferSource();
+    s.buffer = buf;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(550, t);
+    f.frequency.exponentialRampToValueAtTime(160, t + 0.22);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.22, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+    s.connect(f);
+    f.connect(g);
+    g.connect(this.masterGain);
+    s.start(t);
+  }
+
+  public playBowShoot() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(420, t);
+    o.frequency.exponentialRampToValueAtTime(125, t + 0.14);
+    g.gain.setValueAtTime(0.22, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    o.connect(g);
+    g.connect(this.masterGain);
+    o.start(t);
+    o.stop(t + 0.18);
+  }
+
+  public playFlareShoot() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(760, t);
+    o.frequency.exponentialRampToValueAtTime(190, t + 0.28);
+    g.gain.setValueAtTime(0.26, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    o.connect(g);
+    g.connect(this.masterGain);
+    o.start(t);
+    o.stop(t + 0.32);
+  }
+
+  public playExplosionBlast() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    this.emitCaption('[Explosion!]', 2600);
+    const t = this.ctx.currentTime;
+    const buf = this.createNoiseBuffer(0.75);
+    if (buf) {
+      const s = this.ctx.createBufferSource();
+      s.buffer = buf;
+      const f = this.ctx.createBiquadFilter();
+      f.type = 'lowpass';
+      f.frequency.setValueAtTime(840, t);
+      f.frequency.exponentialRampToValueAtTime(95, t + 0.72);
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.45, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.74);
+      s.connect(f);
+      f.connect(g);
+      g.connect(this.masterGain);
+      s.start(t);
+    }
+    const sub = this.ctx.createOscillator();
+    const sg = this.ctx.createGain();
+    sub.type = 'sine';
+    sub.frequency.setValueAtTime(110, t);
+    sub.frequency.exponentialRampToValueAtTime(28, t + 0.55);
+    sg.gain.setValueAtTime(0.42, t);
+    sg.gain.exponentialRampToValueAtTime(0.001, t + 0.58);
+    sub.connect(sg);
+    sg.connect(this.masterGain);
+    sub.start(t);
+    sub.stop(t + 0.6);
+  }
+
+  public playAuraCast() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    [220, 330, 660].forEach((freq, i) => {
+      const o = this.ctx!.createOscillator();
+      const g = this.ctx!.createGain();
+      o.type = i === 0 ? 'sawtooth' : 'sine';
+      o.frequency.setValueAtTime(freq, t);
+      o.frequency.exponentialRampToValueAtTime(freq * 1.45, t + 0.45);
+      g.gain.setValueAtTime(0.11, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.52);
+      o.connect(g);
+      g.connect(this.masterGain!);
+      o.start(t);
+      o.stop(t + 0.55);
+    });
+  }
+
+  public playCrystalShatter() {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    this.emitCaption('[Aura Crystal Shatters!]', 2400);
+    const t = this.ctx.currentTime;
+    [1480, 1960, 2640].forEach((freq, i) => {
+      const o = this.ctx!.createOscillator();
+      const g = this.ctx!.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(freq, t + i * 0.04);
+      o.frequency.exponentialRampToValueAtTime(freq * 0.42, t + i * 0.04 + 0.35);
+      g.gain.setValueAtTime(0.16, t + i * 0.04);
+      g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.04 + 0.38);
+      o.connect(g);
+      g.connect(this.masterGain!);
+      o.start(t + i * 0.04);
+      o.stop(t + i * 0.04 + 0.4);
+    });
+  }
+
+  /** Deep echoing voice synthesis + cavern sub-bass boom + Web Speech API + captions. */
+  public playBossVoice(line: string, durationMs: number = 3400) {
+    this.emitCaption(`THE AURA KING: "${line}"`, durationMs);
+    this.initContext();
+    if (!this.isMuted && this.ctx && this.masterGain) {
+      const t = this.ctx.currentTime;
+      // Echoing sovereign formant resonance bed
+      [68, 102, 136].forEach((f, idx) => {
+        const o = this.ctx!.createOscillator();
+        const g = this.ctx!.createGain();
+        o.type = idx === 0 ? 'sawtooth' : 'triangle';
+        o.frequency.setValueAtTime(f, t);
+        o.frequency.linearRampToValueAtTime(f * 0.86, t + 1.4);
+        g.gain.setValueAtTime(0.001, t);
+        g.gain.linearRampToValueAtTime(idx === 0 ? 0.09 : 0.055, t + 0.14);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 1.55);
+        o.connect(g);
+        g.connect(this.masterGain!);
+        o.start(t);
+        o.stop(t + 1.6);
+      });
+    }
+    try {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window && !this.isMuted) {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(line);
+        utter.pitch = 0.52;
+        utter.rate = 0.82;
+        utter.volume = 0.9;
+        window.speechSynthesis.speak(utter);
+      }
+    } catch {
+      // Headless or speech-blocked fallback handled seamlessly by WebAudio + subtitles
+    }
   }
 }
 

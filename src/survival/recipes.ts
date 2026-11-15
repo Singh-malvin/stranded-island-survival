@@ -343,6 +343,75 @@ export const RECIPES: Recipe[] = [
     ingredients: [{ itemId: 'driftwood', count: 1 }],
     description: 'Reduce dense forge-cured Driftwood into hot charcoal briquettes for Alloy smelting.',
   },
+
+  // =========================================================================
+  // COMBAT ARSENAL (Hunting & Final Showdown Gear)
+  // =========================================================================
+  {
+    id: 'bow',
+    name: 'Recurve Hunting Bow',
+    tier: 1,
+    station: 'hands',
+    result: { itemId: 'bow', count: 1 },
+    ingredients: [
+      { itemId: 'stick', count: 3 },
+      { itemId: 'rope', count: 2 },
+      { itemId: 'fibre', count: 3 },
+    ],
+    description: 'Balanced sinew-backed bow for long-range hunting and boss engagements.',
+  },
+  {
+    id: 'arrow',
+    name: 'Obsidian Arrows (x6)',
+    tier: 1,
+    station: 'hands',
+    result: { itemId: 'arrow', count: 6 },
+    ingredients: [
+      { itemId: 'stick', count: 2 },
+      { itemId: 'flint', count: 2 },
+      { itemId: 'fibre', count: 2 },
+    ],
+    description: 'Fletched flint-and-obsidian arrows.',
+  },
+  {
+    id: 'fire_bomb',
+    name: 'Resin Fire Bomb (x2)',
+    tier: 2,
+    station: 'hands',
+    result: { itemId: 'fire_bomb', count: 2 },
+    ingredients: [
+      { itemId: 'resin', count: 2 },
+      { itemId: 'cloth_scrap', count: 1 },
+      { itemId: 'coal', count: 1 },
+    ],
+    description: 'Incendiary glass flask that bursts in a blazing puddle and ignites tough foes.',
+  },
+  {
+    id: 'flare_gun',
+    name: 'Signal Flare Gun',
+    tier: 3,
+    station: 'workbench',
+    result: { itemId: 'flare_gun', count: 1 },
+    ingredients: [
+      { itemId: 'metal_ingot', count: 1 },
+      { itemId: 'scrap_metal', count: 2 },
+      { itemId: 'resin', count: 1 },
+    ],
+    description: 'Reinforced distress launcher firing magnesium flares at critical weak points.',
+  },
+  {
+    id: 'flare_ammo',
+    name: 'Magnesium Flares (x3)',
+    tier: 2,
+    station: 'hands',
+    result: { itemId: 'flare_ammo', count: 3 },
+    ingredients: [
+      { itemId: 'coal', count: 2 },
+      { itemId: 'scrap_metal', count: 1 },
+      { itemId: 'resin', count: 1 },
+    ],
+    description: 'High-luminance signal rounds capable of disrupting Aura defenses.',
+  },
 ];
 
 export function checkRecipeAvailability(

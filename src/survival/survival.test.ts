@@ -1,6 +1,30 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { BASE_BUILDING, BOAT, FORGE_TUNING, NEEDS, NODE_RESPAWN_HOURS, PART5_IMMERSION_TUNING, TEMPERATURE, TIME, VOYAGE, WATER, WORLD } from './config.ts';
+import {
+  BASE_BUILDING,
+  BOAT,
+  BOSS_TUNING,
+  COMBAT_TUNING,
+  FORGE_TUNING,
+  NEEDS,
+  NODE_RESPAWN_HOURS,
+  PART5_IMMERSION_TUNING,
+  TEMPERATURE,
+  TIME,
+  VOYAGE,
+  WATER,
+  WORLD,
+} from './config.ts';
+import {
+  applyPlayerDamageToBoss,
+  destroyBossCrystal,
+  detonateBossBarrel,
+  getBossDifficultyConfig,
+  getEquippedWeaponDamage,
+  retryBossFromCheckpoint,
+  setBossCombatPhase,
+  startBossEncounter,
+} from './boss.ts';
 import {
   addItem,
   countItem,
@@ -1182,8 +1206,9 @@ describe('Phase 3 — Freshwater Pond Walkable Slope, Sickness Rules & 5-Stage H
     assert.equal(rawRes.state.needs.sicknessCause, 'Raw Meat');
   });
 
-  it('progresses body temperature down to 32.0°C across 5 stages and warms up with fire or hot food/boiled water', () => {
+  it('progresses body temperature gradually across day/rain/night/storm with Day 1 grace and fast fire recovery', () => {
     assert.equal(TEMPERATURE.MIN_BODY_C, 32.0);
+    assert.equal(createInitialSurvivalState().needs.temperature, 37.0);
     assert.equal(getBodyTempStage(37.0).stage, 'Normal');
     assert.equal(getBodyTempStage(36.0).stage, 'Chilly');
     assert.equal(getBodyTempStage(35.0).stage, 'Cold');
@@ -1192,7 +1217,7 @@ describe('Phase 3 — Freshwater Pond Walkable Slope, Sickness Rules & 5-Stage H
 
     // Cold night storm while wet and swimming pushes target body temp down to 32.0°C
     const coldAmbient = computeAmbientTempC(
-      { day: 1, hour: 2, totalHours: 14 },
+      { day: 2, hour: 2, totalHours: 26 },
       { kind: 'storm', rain: 0.9, wind: 0.95 }
     );
     const coldTarget = computeTargetBodyTempC(
@@ -1205,18 +1230,43 @@ describe('Phase 3 — Freshwater Pond Walkable Slope, Sickness Rules & 5-Stage H
         sheltered: false,
         holdingLitTorch: false,
       },
-      100
+      100,
+      { day: 2, hour: 2 },
+      { kind: 'storm', rain: 0.9, wind: 0.95 }
     );
     assert.equal(coldTarget, 32.0);
 
-    // Ticking needs in freezing conditions cools body temp below 35°C and sets cooling trend
-    let needs = createInitialSurvivalState().needs;
+    // 1) Day 1 08:15 AM stays Normal (36.5-37.0°C) even if cool or slightly damp
+    let day1Needs = createInitialSurvivalState().needs;
     for (let i = 0; i < 60; i++) {
-      const stepped = tickNeeds(
-        needs,
+      day1Needs = tickNeeds(
+        day1Needs,
+        1.0,
+        19.0,
+        { kind: 'overcast', rain: 0, wind: 0.3 },
+        {
+          isMoving: false,
+          isSprinting: false,
+          isSwimming: false,
+          nearFire: false,
+          sheltered: false,
+          holdingLitTorch: false,
+        },
+        'survivor',
+        { day: 1, hour: 8.25 }
+      ).needs;
+    }
+    assert.ok(day1Needs.temperature >= 36.5 && day1Needs.temperature <= 37.0);
+    assert.equal(getBodyTempStage(day1Needs.temperature).stage, 'Normal');
+
+    // 2) Day 1 grace period prevents dropping below "Chilly" (>= 35.5°C) even in extreme storm
+    let graceNeeds = createInitialSurvivalState().needs;
+    for (let i = 0; i < 180; i++) {
+      graceNeeds = tickNeeds(
+        graceNeeds,
         2.0,
-        14,
-        { kind: 'storm', rain: 0.9, wind: 0.95 },
+        10.0,
+        { kind: 'storm', rain: 0.9, wind: 0.9 },
         {
           isMoving: false,
           isSprinting: false,
@@ -1224,19 +1274,74 @@ describe('Phase 3 — Freshwater Pond Walkable Slope, Sickness Rules & 5-Stage H
           nearFire: false,
           sheltered: false,
           holdingLitTorch: false,
-        }
-      );
-      needs = stepped.needs;
-      if (i === 5) {
-        assert.equal(needs.tempTrend, 'cooling');
-      }
+        },
+        'survivor',
+        { day: 1, hour: 23 }
+      ).needs;
     }
-    assert.ok(needs.temperature < 32.5, `Expected core temp < 32.5°C, got ${needs.temperature.toFixed(2)}°C`);
-    assert.equal(getBodyTempStage(needs.temperature).stage, 'Severe');
+    assert.ok(graceNeeds.temperature >= 35.5, `Day 1 must not go below Chilly, got ${graceNeeds.temperature}`);
 
-    // Consuming boiled water warms core temperature toward 37°C
+    // 3) Day 2 soaked daytime rain cools ~1°C in ~6-7 real minutes (within 5-10 min band)
+    let rainNeeds = { ...createInitialSurvivalState().needs, wetness: 100 };
+    for (let i = 0; i < 360; i++) {
+      rainNeeds = tickNeeds(
+        rainNeeds,
+        1.0,
+        17.5,
+        { kind: 'rain', rain: 0.55, wind: 0.5 },
+        {
+          isMoving: false,
+          isSprinting: false,
+          isSwimming: false,
+          nearFire: false,
+          sheltered: false,
+          holdingLitTorch: false,
+        },
+        'survivor',
+        { day: 2, hour: 14 }
+      ).needs;
+    }
+    const rainDrop6m = 37.0 - rainNeeds.temperature;
+    assert.ok(
+      rainDrop6m >= 0.55 && rainDrop6m <= 1.25,
+      `Expected ~0.6-1.2°C drop after 6 min soaked in rain, got ${rainDrop6m.toFixed(2)}°C`
+    );
+
+    // 4) Full 6-min storm night on Day 2 progresses smoothly into Severe (< 33.0°C)
+    let stormNeeds = { ...createInitialSurvivalState().needs, wetness: 100 };
+    for (let i = 0; i < 190; i++) {
+      const stepped = tickNeeds(
+        stormNeeds,
+        2.0,
+        11.0,
+        { kind: 'storm', rain: 0.9, wind: 0.85 },
+        {
+          isMoving: false,
+          isSprinting: false,
+          isSwimming: false,
+          nearFire: false,
+          sheltered: false,
+          holdingLitTorch: false,
+        },
+        'survivor',
+        { day: 2, hour: 2 }
+      );
+      stormNeeds = stepped.needs;
+      if (i === 5) assert.equal(stormNeeds.tempTrend, 'cooling');
+    }
+    assert.ok(stormNeeds.temperature < 33.0, `Expected Severe < 33.0°C after full storm night, got ${stormNeeds.temperature.toFixed(2)}°C`);
+    assert.equal(getBodyTempStage(stormNeeds.temperature).stage, 'Severe');
+
+    // 5) Old v1 broken save (32.8°C) migrates cleanly back to 37.0°C
+    const oldSave = JSON.parse(serializeSave(createInitialSurvivalState(), 'autosave'));
+    oldSave.version = 1;
+    oldSave.needs.temperature = 32.8;
+    const migrated = parseAndMigrateSave(JSON.stringify(oldSave));
+    assert.equal(migrated?.needs.temperature, 37.0);
+
+    // 6) Consuming boiled water & sitting by campfire warms significantly faster than cooling
     let coldState = createInitialSurvivalState();
-    coldState.needs = { ...needs, temperature: 34.0 };
+    coldState.needs = { ...stormNeeds, temperature: 34.0 };
     coldState.inventory = addItem(coldState.inventory, 'water_bottle_clean', 1).inventory;
     const cleanSlot = coldState.inventory.findIndex((s) => s?.itemId === 'water_bottle_clean');
     const warmRes = consumeInventorySlot(coldState, cleanSlot);
@@ -1319,7 +1424,7 @@ describe('Part 5 — Dynamic Tides, Survival Milestones & Control Defaults', () 
     assert.ok(unlockedIds.has('ms_harbor'));
   });
 
-  it('provides clean default FOV, sensitivity, captions, and custom keybinds', () => {
+  it('provides clean default FOV, sensitivity, captions, and unique custom keybinds without clashes', () => {
     const ext = loadExtendedGraphicsSettings();
     assert.equal(ext.fovDeg, 75);
     assert.equal(ext.mouseSensitivity, 1.0);
@@ -1327,5 +1432,149 @@ describe('Part 5 — Dynamic Tides, Survival Milestones & Control Defaults', () 
     assert.equal(ext.closedCaptions, true);
     assert.equal(ext.keybinds.photoMode, DEFAULT_KEYBINDS.photoMode);
     assert.equal(ext.keybinds.interact, 'KeyE');
+    assert.equal(ext.keybinds.inspect, 'KeyF');
+    const allDefaultKeys = [
+      ...Object.values(DEFAULT_KEYBINDS),
+      'F3',   // Perf Overlay
+      'Escape',
+    ];
+    assert.equal(new Set(allDefaultKeys).size, allDefaultKeys.length, 'All action keys must be unique');
+  });
+});
+
+describe('Final Boss Showdown — The Aura King, Weapons, Save Migration & Checkpoints', () => {
+  it('crafts combat arsenal recipes (bow, arrow, fire_bomb, flare_gun, flare_ammo) and computes weapon damage', () => {
+    let inv = createEmptyInventory();
+    const mats: Array<[Parameters<typeof addItem>[1], number]> = [
+      ['stick', 10],
+      ['rope', 4],
+      ['fibre', 8],
+      ['flint', 4],
+      ['resin', 6],
+      ['cloth_scrap', 2],
+      ['coal', 4],
+      ['metal_ingot', 2],
+      ['scrap_metal', 4],
+    ];
+    for (const [id, n] of mats) {
+      inv = addItem(inv, id, n).inventory;
+    }
+
+    const nearHands = new Set(['hands'] as const);
+    const nearBench = new Set(['hands', 'workbench'] as const);
+
+    const bowRes = craftRecipeById('bow', inv, nearHands);
+    assert.equal(bowRes.ok, true);
+    inv = bowRes.inventory;
+
+    const arrowRes = craftRecipeById('arrow', inv, nearHands);
+    assert.equal(arrowRes.ok, true);
+    inv = arrowRes.inventory;
+    assert.equal(countItem(inv, 'arrow'), 6);
+
+    const bombRes = craftRecipeById('fire_bomb', inv, nearHands);
+    assert.equal(bombRes.ok, true);
+    inv = bombRes.inventory;
+    assert.equal(countItem(inv, 'fire_bomb'), 2);
+
+    const flareRes = craftRecipeById('flare_gun', inv, nearBench);
+    assert.equal(flareRes.ok, true);
+    inv = flareRes.inventory;
+
+    const ammoRes = craftRecipeById('flare_ammo', inv, nearHands);
+    assert.equal(ammoRes.ok, true);
+    inv = ammoRes.inventory;
+    assert.equal(countItem(inv, 'flare_ammo'), 3);
+
+    assert.ok(getEquippedWeaponDamage('machete', true) > getEquippedWeaponDamage('machete', false));
+    assert.ok(getEquippedWeaponDamage('flare_gun', false) > getEquippedWeaponDamage('stone_axe', false));
+    assert.equal(COMBAT_TUNING.LIGHT_STAMINA_COST > 0, true);
+    assert.equal(BOSS_TUNING.DIFFICULTIES.normal.maxHp > 0, true);
+  });
+
+  it('migrates legacy saves cleanly with default boss encounter state and achievements array', () => {
+    const fresh = createInitialSurvivalState('survivor');
+    const serialized = JSON.parse(serializeSave(fresh)) as Record<string, unknown>;
+    delete serialized.boss;
+    delete serialized.achievements;
+    delete serialized.bossDifficulty;
+
+    const migrated = parseAndMigrateSave(JSON.stringify(serialized));
+    assert.ok(migrated !== null);
+    assert.equal(migrated!.boss.combatPhase, 'inactive');
+    assert.equal(migrated!.boss.phase, 1);
+    assert.equal(migrated!.boss.defeated, false);
+    assert.deepEqual(migrated!.achievements, []);
+    assert.equal(migrated!.bossDifficulty, 'normal');
+  });
+
+  it('runs difficulty scaling, Phase 1->2 crystal shield, barrel AoE, Phase 3 boat flare bonus, defeat & checkpoint retry', () => {
+    const base = createInitialSurvivalState('survivor');
+    const easyCfg = getBossDifficultyConfig('easy');
+    const hardCfg = getBossDifficultyConfig('hard');
+    assert.ok(easyCfg.maxHp < hardCfg.maxHp);
+
+    let s = startBossEncounter(base, 'normal', 1);
+    assert.equal(s.boss.combatPhase, 'intro');
+    assert.equal(s.boss.phase, 1);
+
+    s = setBossCombatPhase(s, 'phase1');
+    assert.equal(s.boss.combatPhase, 'phase1');
+
+    // Push HP below Phase 2 threshold to trigger Phase 2 shield cutscene
+    const toPhase2Dmg = Math.ceil(s.boss.maxHp * (1 - BOSS_TUNING.PHASE2_HP_RATIO)) + 5;
+    const p2Res = applyPlayerDamageToBoss(s, toPhase2Dmg, { isHeavy: true });
+    s = p2Res.state;
+    assert.equal(p2Res.triggeredPhase, 'phase2_cutscene');
+    assert.equal(s.boss.phase, 2);
+
+    s = setBossCombatPhase(s, 'phase2');
+    assert.equal(s.boss.shielded, true);
+    // Shielded boss resists heavy strike until all 3 Aura Crystals are shattered
+    const shieldedHit = applyPlayerDamageToBoss(s, 100);
+    assert.ok(shieldedHit.dealt < 50);
+
+    for (let i = 0 as 0 | 1 | 2; i < 3; i = (i + 1) as 0 | 1 | 2) {
+      const cRes = destroyBossCrystal(s, i);
+      assert.equal(cRes.destroyed, true);
+      s = cRes.state;
+    }
+    assert.equal(s.boss.shielded, false);
+    assert.ok(s.boss.staggeredSec > 0);
+
+    // Barrel AoE within blast radius deals heavy damage + stagger
+    const barrelRes = detonateBossBarrel(s, 0, BOSS_TUNING.EXPLOSIVE_BARREL_RADIUS_M * 0.5);
+    assert.equal(barrelRes.exploded, true);
+    assert.equal(barrelRes.hitBoss, true);
+    assert.ok(barrelRes.dealt > 0);
+    s = barrelRes.state;
+
+    // Checkpoint retry restores alive state & keeps reached checkpoint phase
+    const deadPhase2 = { ...s, alive: false, needs: { ...s.needs, health: 0 } };
+    const retriedPhase2 = retryBossFromCheckpoint(deadPhase2, false);
+    assert.equal(retriedPhase2.alive, true);
+    assert.equal(retriedPhase2.boss.phase, 2);
+    assert.equal(retriedPhase2.needs.health, 100);
+
+    const restartedPhase1 = retryBossFromCheckpoint(deadPhase2, true);
+    assert.equal(restartedPhase1.boss.phase, 1);
+
+    // Push to Phase 3 boat transition
+    const toPhase3Dmg = Math.max(10, Math.ceil(s.boss.hp - s.boss.maxHp * BOSS_TUNING.PHASE3_HP_RATIO) + 10);
+    const p3Res = applyPlayerDamageToBoss(s, toPhase3Dmg, { isHeavy: true });
+    s = p3Res.state;
+    assert.equal(p3Res.triggeredPhase, 'phase3_transition');
+    assert.equal(s.boss.phase, 3);
+
+    s = setBossCombatPhase(s, 'phase3_boat');
+    s = { ...s, boss: { ...s.boss, fightElapsedSec: 42 } };
+
+    // Final flare blow defeats The Aura King, grants achievement & records bossFightTimeSec
+    const finRes = applyPlayerDamageToBoss(s, s.boss.hp + 500, { isFireOrFlare: true });
+    assert.equal(finRes.defeatedNow, true);
+    assert.equal(finRes.state.boss.combatPhase, 'defeat_cutscene');
+    assert.equal(finRes.state.boss.defeated, true);
+    assert.ok(finRes.state.achievements.includes(BOSS_TUNING.ACHIEVEMENT_NAME));
+    assert.ok(finRes.state.stats.bossFightTimeSec >= 42);
   });
 });

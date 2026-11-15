@@ -7,7 +7,66 @@ import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { GRAPHICS_TUNING } from '../survival/config.ts';
+import { GRAPHICS_TUNING, WORLD_VISUAL_TUNING } from '../survival/config.ts';
+
+const GodRayShaftShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uSunScreenPos: { value: new THREE.Vector2(0.72, 0.65) },
+    uSunColor: { value: new THREE.Color(0xffdfa8) },
+    uStrength: { value: WORLD_VISUAL_TUNING.GODRAY_INTENSITY_HIGH },
+    uWeight: { value: WORLD_VISUAL_TUNING.GODRAY_WEIGHT },
+    uDecay: { value: WORLD_VISUAL_TUNING.GODRAY_DECAY },
+    uDensity: { value: WORLD_VISUAL_TUNING.GODRAY_DENSITY },
+    uSampleSteps: { value: WORLD_VISUAL_TUNING.GODRAY_SAMPLES_HIGH },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uSunScreenPos;
+    uniform vec3 uSunColor;
+    uniform float uStrength;
+    uniform float uWeight;
+    uniform float uDecay;
+    uniform float uDensity;
+    uniform float uSampleSteps;
+    varying vec2 vUv;
+
+    void main() {
+      vec4 base = texture2D(tDiffuse, vUv);
+      if (uStrength <= 0.005) {
+        gl_FragColor = base;
+        return;
+      }
+      int steps = int(clamp(uSampleSteps, 6.0, 24.0));
+      vec2 deltaTexCoord = (vUv - uSunScreenPos) * (uDensity / float(steps));
+      vec2 coord = vUv;
+      float illumDecay = 1.0;
+      float accum = 0.0;
+      for (int i = 0; i < 24; i++) {
+        if (i >= steps) break;
+        coord -= deltaTexCoord;
+        vec2 cClamped = clamp(coord, vec2(0.001), vec2(0.999));
+        vec3 s = texture2D(tDiffuse, cClamped).rgb;
+        // Isolate sunlit sky / bright cloud breaks so dark cliff edges cast long crepuscular shafts
+        float luma = dot(s, vec3(0.2126, 0.7152, 0.0722));
+        float skyMask = smoothstep(0.68, 1.15, luma);
+        float inBounds = step(0.0, coord.x) * step(coord.x, 1.0) * step(0.0, coord.y) * step(coord.y, 1.0);
+        accum += skyMask * illumDecay * uWeight * inBounds;
+        illumDecay *= uDecay;
+      }
+      float sunProx = 1.0 - smoothstep(0.0, 1.35, length(vUv - uSunScreenPos));
+      float shaft = (accum / float(steps)) * uStrength * (0.38 + 0.62 * sunProx);
+      gl_FragColor = vec4(base.rgb + uSunColor * shaft, base.a);
+    }
+  `,
+};
 
 const SurvivalGradeShader = {
   uniforms: {
@@ -215,20 +274,26 @@ export interface PostFXConfigOptions {
   ssao?: boolean;
   smaa?: boolean;
   dof?: boolean;
+  godRays?: boolean;
+  godRayIntensity?: number;
+  godRaySamples?: number;
 }
 
 export class PostFXPipeline {
   private composer: EffectComposer;
   private ssaoPass: SSAOPass;
+  private godRayPass: ShaderPass;
   private bloomPass: UnrealBloomPass;
   private bokehPass: BokehPass;
   private smaaPass: SMAAPass;
   private gradePass: ShaderPass;
   private ssaoEnabled = false;
+  private godRaysEnabled = false;
   private bloomEnabled = false;
   private dofEnabled = false;
   private smaaEnabled = false;
   private gradeEnabled = false;
+  private godRayBaseIntensity: number = WORLD_VISUAL_TUNING.GODRAY_INTENSITY_HIGH;
 
   constructor(
     renderer: THREE.WebGLRenderer,
@@ -255,6 +320,9 @@ export class PostFXPipeline {
     this.ssaoPass.maxDistance = GRAPHICS_TUNING.SSAO_MAX_DISTANCE;
     this.composer.addPass(this.ssaoPass);
 
+    this.godRayPass = new ShaderPass(GodRayShaftShader);
+    this.composer.addPass(this.godRayPass);
+
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(safeW, safeH),
       GRAPHICS_TUNING.BLOOM_STRENGTH,
@@ -280,7 +348,7 @@ export class PostFXPipeline {
     this.gradePass = new ShaderPass(SurvivalGradeShader);
     this.composer.addPass(this.gradePass);
 
-    this.configure({ bloom: true, grade: true, ssao: true, smaa: true, dof: false });
+    this.configure({ bloom: true, grade: true, ssao: true, smaa: true, dof: false, godRays: true });
   }
 
   public configure(optsOrBloom: PostFXConfigOptions | boolean, legacyGrade?: boolean) {
@@ -294,8 +362,16 @@ export class PostFXPipeline {
     this.ssaoEnabled = Boolean(opts.ssao);
     this.smaaEnabled = Boolean(opts.smaa);
     this.dofEnabled = Boolean(opts.dof);
+    this.godRaysEnabled = opts.godRays !== false && (opts.godRayIntensity ?? this.godRayBaseIntensity) > 0;
+    if (opts.godRayIntensity !== undefined) {
+      this.godRayBaseIntensity = opts.godRayIntensity;
+    }
+    if (opts.godRaySamples !== undefined) {
+      this.godRayPass.uniforms.uSampleSteps.value = opts.godRaySamples;
+    }
 
     this.ssaoPass.enabled = this.ssaoEnabled;
+    this.godRayPass.enabled = this.godRaysEnabled;
     this.bloomPass.enabled = this.bloomEnabled;
     this.bokehPass.enabled = this.dofEnabled;
     this.smaaPass.enabled = this.smaaEnabled;
@@ -321,8 +397,28 @@ export class PostFXPipeline {
     motionVelX?: number;
     motionVelY?: number;
     photoFilter?: number;
+    sunScreenX?: number;
+    sunScreenY?: number;
+    sunScreenWeight?: number;
+    sunColor?: THREE.Color;
     tSec: number;
   }) {
+    const gu = this.godRayPass.uniforms;
+    const grW = opts.sunScreenWeight ?? 0;
+    const activeRay = this.godRaysEnabled && grW > 0.01 && opts.nightFactor < 0.85;
+    this.godRayPass.enabled = activeRay;
+    if (activeRay) {
+      gu.uSunScreenPos.value.set(opts.sunScreenX ?? 0.5, opts.sunScreenY ?? 0.5);
+      gu.uStrength.value =
+        this.godRayBaseIntensity *
+        grW *
+        (1 - opts.nightFactor * 0.9) *
+        Math.max(0.28, 1 - opts.stormFactor * 0.45);
+      if (opts.sunColor) {
+        gu.uSunColor.value.copy(opts.sunColor);
+      }
+    }
+
     const u = this.gradePass.uniforms;
     u.uNight.value = opts.nightFactor;
     u.uCold.value = opts.coldFactor;

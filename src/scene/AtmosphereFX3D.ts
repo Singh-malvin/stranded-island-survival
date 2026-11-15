@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
-import { GRAPHICS_TUNING, WORLD } from '../survival/config.ts';
+import { GRAPHICS_TUNING, WORLD, WORLD_VISUAL_TUNING } from '../survival/config.ts';
 import type { WeatherState } from '../survival/types.ts';
 
 /**
@@ -357,6 +357,7 @@ export interface SkyDomeHandle {
   material: THREE.ShaderMaterial;
   iblScene: THREE.Scene;
   iblSky: Sky;
+  setCloudPanorama: (tex: THREE.Texture | null) => void;
   updatePhysicalSky: (
     tSec: number,
     sunDir: THREE.Vector3,
@@ -417,6 +418,12 @@ export function buildAtmosphericSkyDome(scene: THREE.Scene): SkyDomeHandle {
       uStorm: { value: 0 },
       uNight: { value: 0 },
       uLightning: { value: 0 },
+      uCloudPano: { value: null },
+      uHasCloudPano: { value: 0 },
+      uCloudDriftSpeed: { value: WORLD_VISUAL_TUNING.STORM_CLOUD_DRIFT_SPEED },
+      uCloudOpacity: { value: WORLD_VISUAL_TUNING.STORM_CLOUD_OPACITY },
+      uCloudContrast: { value: WORLD_VISUAL_TUNING.STORM_CLOUD_CONTRAST },
+      uCloudSunRimBoost: { value: WORLD_VISUAL_TUNING.STORM_CLOUD_SUN_RIM_BOOST },
     },
     vertexShader: /* glsl */ `
       varying vec3 vDir;
@@ -434,6 +441,12 @@ export function buildAtmosphericSkyDome(scene: THREE.Scene): SkyDomeHandle {
       uniform float uStorm;
       uniform float uNight;
       uniform float uLightning;
+      uniform sampler2D uCloudPano;
+      uniform float uHasCloudPano;
+      uniform float uCloudDriftSpeed;
+      uniform float uCloudOpacity;
+      uniform float uCloudContrast;
+      uniform float uCloudSunRimBoost;
       varying vec3 vDir;
 
       float hash31(vec3 p) {
@@ -496,6 +509,26 @@ export function buildAtmosphericSkyDome(scene: THREE.Scene): SkyDomeHandle {
         cloudLit += uSunColor * sunForward * 0.24;
         vec3 cloudShadow = mix(uHorizonColor * 0.46, vec3(0.22, 0.28, 0.38), 0.52 + uStorm * 0.36);
         vec3 cloudCol = mix(cloudShadow, cloudLit, lit);
+
+        // Layer Cycles equirectangular storm-break cloud deck when loaded
+        if (uHasCloudPano > 0.5) {
+          vec2 panoUv = vec2(
+            fract(0.5 + atan(d.x, -d.z) / 6.2831853 + uTime * uCloudDriftSpeed),
+            clamp(0.5 + asin(clamp(d.y, -1.0, 1.0)) / 3.14159265, 0.01, 0.99)
+          );
+          vec4 panoTex = texture2D(uCloudPano, panoUv);
+          float horMask = smoothstep(0.01, 0.16, d.y);
+          float panoAlpha = clamp(panoTex.a * uCloudOpacity * horMask, 0.0, 1.0);
+          vec3 liftedTex = max(panoTex.rgb, vec3(0.085, 0.11, 0.16));
+          vec3 panoCol = pow(liftedTex, vec3(uCloudContrast));
+          panoCol *= mix(vec3(1.0), uSunColor * 1.08, 0.36);
+          panoCol += uSunColor * sunForward * uCloudSunRimBoost * panoAlpha;
+          panoCol = mix(panoCol, panoCol * vec3(0.58, 0.64, 0.76), uStorm * 0.52);
+          float procExtra = clouds * (0.28 + uStorm * 0.55) * (1.0 - panoAlpha * 0.75);
+          clouds = clamp(max(panoAlpha, procExtra), 0.0, 1.0);
+          cloudCol = mix(cloudCol, panoCol, panoAlpha / max(0.001, clouds));
+        }
+
         cloudCol = mix(cloudCol, vec3(0.08, 0.11, 0.18), uNight * 0.88);
         cloudCol += vec3(0.65, 0.78, 0.95) * uLightning * 0.75;
 
@@ -590,6 +623,11 @@ export function buildAtmosphericSkyDome(scene: THREE.Scene): SkyDomeHandle {
     if (u2.showSunDisc) u2.showSunDisc.value = 0;
   };
 
+  const setCloudPanorama = (tex: THREE.Texture | null) => {
+    material.uniforms.uCloudPano.value = tex;
+    material.uniforms.uHasCloudPano.value = tex ? 1 : 0;
+  };
+
   return {
     mesh: skyGroup,
     physicalSky,
@@ -597,6 +635,7 @@ export function buildAtmosphericSkyDome(scene: THREE.Scene): SkyDomeHandle {
     material,
     iblScene,
     iblSky,
+    setCloudPanorama,
     updatePhysicalSky,
   };
 }
@@ -618,45 +657,12 @@ export function buildAtmosphereFXRig(
   scene: THREE.Scene,
   getTerrainHeight: (x: number, z: number) => number
 ): AtmosphereFXRig {
-  const mistTex = createSoftMistTexture(64);
-  const mistMat = new THREE.MeshBasicMaterial({
-    map: mistTex,
-    color: 0xdbeafe,
-    transparent: true,
-    opacity: 0.2,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-
   const mistGroup = new THREE.Group();
-  const mistAnchors = [
-    { x: 10, z: -18, r: 22 },
-    { x: -16, z: -26, r: 20 },
-    { x: 58, z: -22, r: 22 },
-    { x: 64, z: -48, r: 24 },
-    { x: -64, z: -38, r: 24 },
-    { x: -72, z: -56, r: 22 },
-    { x: 18, z: -52, r: 26 },
-    { x: -24, z: 74, r: 18 },
-    { x: 26, z: 68, r: 18 },
-    { x: -12, z: 112, r: 20 },
-    { x: 52, z: 10, r: 20 },
-    { x: -46, z: 4, r: 20 },
-  ];
-
   const mistPatches: AtmosphereFXRig['mistPatches'] = [];
-  const patchGeom = new THREE.PlaneGeometry(1, 1);
-  patchGeom.rotateX(-Math.PI / 2);
-
-  mistAnchors.forEach((a, idx) => {
-    const mesh = new THREE.Mesh(patchGeom, mistMat);
-    const y = Math.max(WORLD.WATER_LEVEL + 0.35, getTerrainHeight(a.x, a.z) + 0.95);
-    mesh.position.set(a.x, y, a.z);
-    mesh.scale.set(a.r * 1.4, 1, a.r * 1.2);
-    mistGroup.add(mesh);
-    mistPatches.push({ mesh, baseX: a.x, baseZ: a.z, phase: idx * 1.17 });
-  });
   scene.add(mistGroup);
+  const mistTex = createSoftMistTexture();
+  // Note: Removed rectangular Box/Plane mist quads (exponential valley haze shader now handles ground mist seamlessly)
+  void getTerrainHeight;
 
   // Volumetric-style forest sun shafts (smooth fresnel-attenuated shader, no hard cone edges)
   const shaftsGroup = new THREE.Group();

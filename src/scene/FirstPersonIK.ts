@@ -59,7 +59,7 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         twoHanded: false,
         scale: 0.92,
         baseOffset: [0.22, -0.25, -0.46],
-        baseEuler: [0.16, Math.PI * 0.5, -0.06],
+        baseEuler: [-0.44, 0.30, -0.14],
         handRollOffsetR: [0, 0, 0],
         handRollOffsetL: [0, 0, 0],
         metalTint: itemId === 'metal_axe' ? 0xb8c2cc : undefined,
@@ -72,8 +72,8 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         gripPose: 'twoHanded',
         twoHanded: true,
         scale: 0.92,
-        baseOffset: [0.16, -0.27, -0.48],
-        baseEuler: [0.18, Math.PI * 0.48, -0.08],
+        baseOffset: [0.19, -0.26, -0.47],
+        baseEuler: [-0.42, 0.26, -0.14],
         handRollOffsetR: [0, 0, 0],
         handRollOffsetL: [0, 0, 0],
         metalTint: itemId === 'metal_pick' ? 0xc0cad4 : undefined,
@@ -98,7 +98,43 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         twoHanded: false,
         scale: 1.0,
         baseOffset: [0.23, -0.26, -0.45],
-        baseEuler: [0.24, Math.PI * 0.5, -0.08],
+        baseEuler: [-0.50, 0.26, -0.14],
+        handRollOffsetR: [0, 0, 0],
+        handRollOffsetL: [0, 0, 0],
+      };
+    case 'bow':
+      return {
+        itemId,
+        modelKey: 'bow',
+        gripPose: 'power',
+        twoHanded: true,
+        scale: 0.94,
+        baseOffset: [-0.10, -0.18, -0.46],
+        baseEuler: [0.06, Math.PI - 0.18, -0.22],
+        handRollOffsetR: [0, 0, 0],
+        handRollOffsetL: [0, 0, 0],
+      };
+    case 'fire_bomb':
+      return {
+        itemId,
+        modelKey: 'fireBomb',
+        gripPose: 'pinch',
+        twoHanded: false,
+        scale: 0.95,
+        baseOffset: [0.22, -0.22, -0.43],
+        baseEuler: [-0.15, 0.25, -0.08],
+        handRollOffsetR: [0, 0, 0],
+        handRollOffsetL: [0, 0, 0],
+      };
+    case 'flare_gun':
+      return {
+        itemId,
+        modelKey: 'flareGun',
+        gripPose: 'power',
+        twoHanded: false,
+        scale: 1.05,
+        baseOffset: [0.21, -0.21, -0.42],
+        baseEuler: [0.02, Math.PI, 0.0],
         handRollOffsetR: [0, 0, 0],
         handRollOffsetL: [0, 0, 0],
       };
@@ -136,7 +172,7 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         twoHanded: false,
         scale: 0.96,
         baseOffset: [0.22, -0.25, -0.45],
-        baseEuler: [0.16, Math.PI * 0.5, -0.05],
+        baseEuler: [-0.40, 0.24, -0.10],
         handRollOffsetR: [0, 0, 0],
         handRollOffsetL: [0, 0, 0],
       };
@@ -196,8 +232,8 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         gripPose: 'power',
         twoHanded: true,
         scale: 0.82,
-        baseOffset: [0.18, -0.26, -0.45],
-        baseEuler: [-0.45, 0.35, 0.10],
+        baseOffset: [0.20, -0.25, -0.43],
+        baseEuler: [-1.08, 0.18, -0.08],
         handRollOffsetR: [0, 0, 0],
         handRollOffsetL: [0, 0, 0],
       };
@@ -210,7 +246,7 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         twoHanded: false,
         scale: 0.94,
         baseOffset: [0.21, -0.21, -0.41],
-        baseEuler: [0.22, 0.45, -0.10],
+        baseEuler: [-0.25, 0.25, -0.10],
         handRollOffsetR: [0, 0, 0],
         handRollOffsetL: [0, 0, 0],
       };
@@ -381,6 +417,10 @@ export interface IKFrameContext {
   euphoriaBrace?: number; // 0..1 landing arm brace reach
   euphoriaFlail?: number; // 0..1 falling windmilling flail
   euphoriaFlailAngle?: number;
+  blockBlend?: number; // 0..1 defensive weapon guard across chest
+  heavyChargeBlend?: number; // 0..1 charged heavy swing pull-back
+  bowDrawBlend?: number; // 0..1 bowstring draw pull toward cheek
+  dodgeBlend?: number; // 0..1 combat dodge roll dip
 }
 
 interface ArmBoneChain {
@@ -886,6 +926,11 @@ export class FirstPersonIKRig {
 
     const sit = ctx.sitBlend ?? 0;
     const sleep = ctx.sleepBlend ?? 0;
+    const block = ctx.blockBlend ?? 0;
+    const heavyChg = ctx.heavyChargeBlend ?? 0;
+    const bowDraw = ctx.bowDrawBlend ?? 0;
+    const dodge = ctx.dodgeBlend ?? 0;
+    const chargeTremble = heavyChg > 0.35 ? Math.sin(ctx.elapsedSec * 48) * 0.004 * heavyChg : 0;
     const chewBob = ctx.biteEatBlend > 0.05 ? Math.sin(ctx.elapsedSec * 16) * 0.014 * ctx.biteEatBlend : 0;
 
     if (this.activeItemClone) {
@@ -899,6 +944,10 @@ export class FirstPersonIKRig {
         fig8X +
         swingPosX +
         shiverJit +
+        chargeTremble -
+        block * 0.14 -
+        heavyChg * 0.05 +
+        bowDraw * 0.05 +
         inspectBlend * IK_SWAY_TUNING.INSPECT_POS_OFFSET[0] -
         drinkBottle * 0.08,
       by +
@@ -908,7 +957,11 @@ export class FirstPersonIKRig {
         this.sprintPose * IK_SWAY_TUNING.SPRINT_DROP_Y +
         this.wallPullback * IK_SWAY_TUNING.WALL_PULLBACK_MAX_Y +
         swingPosY +
-        euphY -
+        euphY +
+        block * 0.10 +
+        heavyChg * 0.08 +
+        bowDraw * 0.05 -
+        dodge * 0.14 -
         exhausted * 0.036 -
         sit * 0.045 -
         ctx.proneBlend * 0.055 -
@@ -924,6 +977,8 @@ export class FirstPersonIKRig {
         this.impactRecoil * IK_SWAY_TUNING.IMPACT_RECOIL_BACK_Z +
         swingPosZ +
         euphZ +
+        block * 0.08 +
+        heavyChg * 0.09 +
         ctx.biteEatBlend * 0.16 +
         drinkBottle * 0.17 +
         inspectBlend * IK_SWAY_TUNING.INSPECT_POS_OFFSET[2]
@@ -937,7 +992,10 @@ export class FirstPersonIKRig {
         this.wallPullback * IK_SWAY_TUNING.WALL_PULLBACK_PITCH +
         this.impactRecoil * IK_SWAY_TUNING.IMPACT_RECOIL_PITCH +
         swingRotX +
-        euphPitch +
+        euphPitch -
+        block * 0.35 -
+        heavyChg * 0.62 -
+        dodge * 0.45 +
         drinkBottle * 0.72 +
         ctx.biteEatBlend * 0.28 +
         inspectTurn * 0.35,
@@ -945,11 +1003,15 @@ export class FirstPersonIKRig {
         this.swayX * IK_SWAY_TUNING.INERTIA_ROT_YAW_MULT +
         this.sprintPose * IK_SWAY_TUNING.SPRINT_TILT_YAW +
         swingRotY +
+        block * 0.72 -
+        heavyChg * 0.24 +
         inspectTurn * 0.95,
       erz +
         this.swayX * IK_SWAY_TUNING.INERTIA_ROT_ROLL_MULT +
         this.sprintPose * IK_SWAY_TUNING.SPRINT_TILT_ROLL +
         swingRotZ +
+        block * 1.18 +
+        dodge * 0.52 +
         drinkBottle * 0.18 +
         inspectTurn * 0.28
     );
@@ -971,6 +1033,11 @@ export class FirstPersonIKRig {
     if (hasItem && this.boneR.upper && this.boneR.mid && this.boneR.hand) {
       this.activeGripR!.getWorldPosition(_targetR);
       this.activeGripR!.getWorldQuaternion(_quatR);
+      if (this.currentSpec.itemId === 'bow' && bowDraw > 0.01) {
+        // Pull string hand cleanly back toward right cheek relative to camera root
+        _tmpVecA.set(0.05, 0.03, 0.24).multiplyScalar(bowDraw).applyQuaternion(this.root.quaternion);
+        _targetR.add(_tmpVecA);
+      }
 
       _poleWorld
         .set(

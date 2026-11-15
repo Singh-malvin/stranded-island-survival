@@ -1,9 +1,25 @@
 import * as THREE from 'three';
-import { TERRAIN_TUNING, WORLD } from '../survival/config.ts';
+import { TERRAIN_TUNING, WORLD, WORLD_VISUAL_TUNING } from '../survival/config.ts';
 import type { PBRTextureBank } from './PBRTextures.ts';
+
+function createFallbackWhiteTex(): THREE.DataTexture {
+  const tex = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
+  tex.needsUpdate = true;
+  return tex;
+}
 
 export interface TerrainSplatUniforms {
   uUsePBR: { value: number };
+  uHasMacro: { value: number };
+  uMacroWeight: { value: number };
+  uSpanM: { value: number };
+  uMacroAlbedo: { value: THREE.Texture };
+  uTerrainMask0: { value: THREE.Texture };
+  uSunDir: { value: THREE.Vector3 };
+  uSunColor: { value: THREE.Color };
+  uHazeColor: { value: THREE.Color };
+  uHazeDensity: { value: number };
+  uHazeFalloff: { value: number };
   uSandDiff: { value: THREE.Texture };
   uSandNor: { value: THREE.Texture };
   uSandRough: { value: THREE.Texture };
@@ -25,9 +41,20 @@ export function createTerrainSplatMaterial(pbrBank: PBRTextureBank): TerrainMate
   const sand = pbrBank.getBase('sand');
   const grass = pbrBank.getBase('grass');
   const rock = pbrBank.getBase('rock');
+  const fallbackTex = createFallbackWhiteTex();
 
   const uniforms: TerrainSplatUniforms = {
     uUsePBR: { value: 1 },
+    uHasMacro: { value: 0 },
+    uMacroWeight: { value: WORLD_VISUAL_TUNING.TERRAIN_MACRO_BLEND_WEIGHT },
+    uSpanM: { value: 540.0 },
+    uMacroAlbedo: { value: fallbackTex },
+    uTerrainMask0: { value: fallbackTex },
+    uSunDir: { value: new THREE.Vector3(0.45, 0.55, -0.7).normalize() },
+    uSunColor: { value: new THREE.Color(0xfff1d6) },
+    uHazeColor: { value: new THREE.Color(0x7c8d9c) },
+    uHazeDensity: { value: WORLD_VISUAL_TUNING.HAZE_HEIGHT_DENSITY },
+    uHazeFalloff: { value: WORLD_VISUAL_TUNING.HAZE_HEIGHT_FALLOFF },
     uSandDiff: { value: sand.map },
     uSandNor: { value: sand.normalMap },
     uSandRough: { value: sand.roughnessMap },
@@ -46,7 +73,7 @@ export function createTerrainSplatMaterial(pbrBank: PBRTextureBank): TerrainMate
     flatShading: false,
   });
   material.userData.__skipScenePBR = true;
-  material.customProgramCacheKey = () => 'stranded-terrain-splat-v2';
+  material.customProgramCacheKey = () => 'stranded-terrain-splat-v3';
 
   const customCompile = (shader: THREE.WebGLProgramParametersWithUniforms) => {
     Object.assign(shader.uniforms, uniforms);
@@ -70,6 +97,16 @@ vTerrainWNorm = normalize(mat3(modelMatrix) * objectNormal);`
         '#include <common>',
         `#include <common>
 uniform float uUsePBR;
+uniform float uHasMacro;
+uniform float uMacroWeight;
+uniform float uSpanM;
+uniform sampler2D uMacroAlbedo;
+uniform sampler2D uTerrainMask0;
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform vec3 uHazeColor;
+uniform float uHazeDensity;
+uniform float uHazeFalloff;
 uniform sampler2D uSandDiff;
 uniform sampler2D uSandNor;
 uniform sampler2D uSandRough;
@@ -199,27 +236,37 @@ computeTerrainWeights(
   tSandUv, tGrassUv, tRockUv
 );
 
-vec3 sandBaseCol = vec3(0.54, 0.47, 0.34);
-vec3 grassBaseCol = vec3(0.16, 0.30, 0.12);
-vec3 rockBaseCol = vec3(0.18, 0.17, 0.17);
-vec3 transBaseCol = vec3(0.28, 0.24, 0.16);
+vec3 sandBaseCol = vec3(0.58, 0.50, 0.36);
+vec3 grassBaseCol = vec3(0.30, 0.31, 0.16);
+vec3 rockBaseCol = vec3(0.20, 0.18, 0.16);
+vec3 transBaseCol = vec3(0.36, 0.30, 0.20);
 
 // Fine sand wind ripples & grain variation + footprints/hollows
 float microGrain = tNoise2(vTerrainWPos.xz * 14.5) * 0.08;
 float ripplePattern = sin(vTerrainWPos.x * 5.2 + vTerrainWPos.z * 2.1 + tFbm(vTerrainWPos.xz * 0.7) * 3.2) * 0.5 + 0.5;
 float dimples = tNoise2(vTerrainWPos.xz * 2.3);
 
+float strataWave = sin(vTerrainWPos.y * 1.9 + tFbm(vTerrainWPos.xz * 0.12) * 2.6) * 0.5 + 0.5;
+float vertErosion = tNoise2(vec2((vTerrainWPos.x * 0.45 + vTerrainWPos.z * 0.32), vTerrainWPos.y * 0.055));
+vec3 canyonPalette = mix(
+  vec3(0.22, 0.19, 0.18),
+  mix(vec3(0.52, 0.36, 0.23), vec3(0.40, 0.21, 0.14), smoothstep(0.35, 0.85, strataWave)),
+  smoothstep(0.25, 0.78, tFbm(vec2(vTerrainWPos.y * 0.35, vTerrainWPos.x * 0.05)))
+);
+canyonPalette *= 0.76 + 0.48 * vertErosion;
 if (uUsePBR > 0.5) {
   vec3 sTex = texture2D(uSandDiff, tSandUv).rgb;
   vec3 gTex = texture2D(uGrassDiff, tGrassUv).rgb;
   vec3 rTex = texture2D(uRockDiff, tRockUv).rgb;
-  sandBaseCol = sTex * vec3(0.84, 0.72, 0.50) * (0.94 + ripplePattern * 0.08 + microGrain - dimples * 0.05);
-  grassBaseCol = gTex * vec3(0.46, 0.74, 0.34);
-  rockBaseCol = rTex * vec3(0.45, 0.43, 0.42);
+  sandBaseCol = sTex * vec3(0.88, 0.74, 0.52) * (0.94 + ripplePattern * 0.08 + microGrain - dimples * 0.05);
+  grassBaseCol = mix(sandBaseCol * 0.78, gTex * vec3(0.56, 0.58, 0.30), 0.55);
+  rockBaseCol = mix(rTex * vec3(0.48, 0.44, 0.40), canyonPalette * (0.65 + 0.75 * rTex), 0.72);
   // Transition soil/pebble zone mixes darkened loam, coarse sand & pebbled noise speckles
-  float pebbleNoise = smoothstep(0.66, 0.85, tNoise2(vTerrainWPos.xz * 7.8));
-  transBaseCol = mix(sandBaseCol * 0.70, grassBaseCol * 0.84, 0.46);
-  transBaseCol = mix(transBaseCol, rockBaseCol * 0.84, pebbleNoise * 0.58);
+  float pebbleNoise = smoothstep(0.62, 0.84, tNoise2(vTerrainWPos.xz * 7.8));
+  transBaseCol = mix(sandBaseCol * 0.74, grassBaseCol * 0.88, 0.38);
+  transBaseCol = mix(transBaseCol, rockBaseCol * 0.84, pebbleNoise * 0.62);
+} else {
+  rockBaseCol = canyonPalette;
 }
 
 vec3 wetSandCol = sandBaseCol * vec3(0.48, 0.45, 0.40);
@@ -227,12 +274,41 @@ vec3 wetSandCol = sandBaseCol * vec3(0.48, 0.45, 0.40);
 float eastWarm = smoothstep(26.0, 58.0, vTerrainWPos.x) * smoothstep(-10.0, -45.0, vTerrainWPos.z);
 grassBaseCol = mix(grassBaseCol, grassBaseCol * vec3(1.16, 1.02, 0.78), eastWarm * 0.38);
 
-diffuseColor.rgb =
+vec3 detailTerrainCol =
   wetSandCol * tWWet +
   sandBaseCol * tWDrySand +
   transBaseCol * tWTrans +
   grassBaseCol * tWGrass +
-  rockBaseCol * tWRock;`
+  rockBaseCol * tWRock;
+
+if (uHasMacro > 0.5) {
+  vec2 macroUv = vec2(
+    clamp(0.5 + vTerrainWPos.x / max(1.0, uSpanM), 0.002, 0.998),
+    clamp(0.5 - vTerrainWPos.z / max(1.0, uSpanM), 0.002, 0.998)
+  );
+  vec3 macroCol = texture2D(uMacroAlbedo, macroUv).rgb;
+  vec4 mask0 = texture2D(uTerrainMask0, macroUv);
+  float mSum = max(0.001, mask0.r + mask0.g + mask0.b + mask0.a);
+  float mWet = mask0.r / mSum;
+  float mSand = mask0.g / mSum;
+  float mGrass = mask0.b / mSum;
+  float mRock = mask0.a / mSum;
+  // Re-weight fine PBR tile detail using Blender terrain masks for crisp close-up texture
+  vec3 maskedDetail =
+    wetSandCol * mWet +
+    sandBaseCol * mSand +
+    mix(grassBaseCol, transBaseCol, tWTrans * 0.55) * mGrass +
+    rockBaseCol * mRock;
+  float camDist = length(vTerrainWPos - cameraPosition);
+  // Up close show fine sandy/grassy grain blended with macro variation; at mid/far distance favor baked Cycles macro tone & canyon strata
+  float macroBlend = mix(clamp(uMacroWeight * 0.55, 0.0, 0.92), clamp(uMacroWeight, 0.0, 0.92), smoothstep(12.0, 68.0, camDist));
+  // Preserve detail modulation (high-frequency brightness vs mean) so close ground never looks blurry
+  float detailLuma = dot(maskedDetail, vec3(0.299, 0.587, 0.114));
+  vec3 modDetail = macroCol * clamp(detailLuma * 2.15, 0.52, 1.48);
+  detailTerrainCol = mix(maskedDetail * (0.72 + 0.58 * macroCol), modDetail, macroBlend);
+}
+
+diffuseColor.rgb = detailTerrainCol;`
       )
       .replace(
         '#include <roughnessmap_fragment>',
@@ -266,6 +342,21 @@ if (uUsePBR > 0.5) {
   rN.xy *= 1.48;
   vec3 blendedN = normalize(sN * (tWWet + tWDrySand + tWTrans * 0.5) + gN * (tWGrass + tWTrans * 0.5) + rN * tWRock);
   normal = terrainPerturbNormal(-vViewPosition, normal, blendedN, vTerrainWPos.xz * 0.15);
+}`
+      )
+      .replace(
+        '#include <fog_fragment>',
+        `#include <fog_fragment>
+{
+  vec3 toFrag = vTerrainWPos - cameraPosition;
+  float dist = length(toFrag);
+  vec3 rayDir = toFrag / max(0.001, dist);
+  float hFactor = exp(-max(0.0, vTerrainWPos.y) * max(0.001, uHazeFalloff));
+  float heightFog = (1.0 - exp(-max(0.0, dist - 22.0) * 0.0046 * hFactor)) * clamp(uHazeDensity, 0.0, 0.95);
+  float sunAlign = pow(max(dot(rayDir, normalize(uSunDir)), 0.0), ${WORLD_VISUAL_TUNING.HAZE_SUN_GLOW_POWER.toFixed(2)});
+  vec3 hazeTint = mix(uHazeColor, uSunColor * 1.15, clamp(sunAlign * 0.85, 0.0, 0.85));
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, hazeTint, clamp(heightFog * 0.62, 0.0, 0.72));
+  gl_FragColor.rgb += uSunColor * sunAlign * clamp((dist - 18.0) / 140.0, 0.0, 1.0) * ${WORLD_VISUAL_TUNING.HAZE_SUN_GLOW_STRENGTH.toFixed(3)};
 }`
       );
   };
@@ -447,7 +538,7 @@ transformed.z += sway * 0.65 * windStrength;`
 
   const dummy = new THREE.Object3D();
   const cColor = new THREE.Color();
-  const grassPalette = [0x4f8a36, 0x649d3b, 0x7cb044, 0x3d752c, 0x90a94a];
+  const grassPalette = [0x928240, 0xaa934e, 0x717535, 0xb89f58, 0x847b3d];
 
   let gPlaced = 0;
   let sampleIdx = 1;
@@ -470,8 +561,11 @@ transformed.z += sway * 0.65 * windStrength;`
       0,
       1
     );
-    const patchCluster = 0.55 + 0.45 * Math.sin(wx * 0.23 + wz * 0.17) * Math.cos(wx * 0.13 - wz * 0.21);
-    const keepProb = (0.06 + 0.94 * transT * transT) * patchCluster;
+    const patchCluster = Math.max(
+      0,
+      0.38 + 0.62 * Math.sin(wx * 0.21 + wz * 0.16) * Math.cos(wx * 0.14 - wz * 0.19)
+    );
+    const keepProb = (0.04 + 0.78 * transT * transT) * patchCluster;
     if (hashSeed(sampleIdx * 1.37) > keepProb) continue;
 
     dummy.position.set(wx, h - 0.02, wz);

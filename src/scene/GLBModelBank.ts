@@ -42,6 +42,17 @@ export interface LoadedGLBSet {
     spear: THREE.Group;
     waterContainer: THREE.Group;
     foodRation: THREE.Group;
+    bow: THREE.Group;
+    arrow: THREE.Group;
+    fireBomb: THREE.Group;
+    flareGun: THREE.Group;
+  };
+  boss: {
+    lavansBali: THREE.Group;
+    lavansAnimations: THREE.AnimationClip[];
+    arenaShore: THREE.Group;
+    auraShade: THREE.Group;
+    shockwaveRing: THREE.Group;
   };
   campfire: {
     lit: THREE.Group;
@@ -82,6 +93,7 @@ export interface LoadedGLBSet {
     sandPuff: THREE.Texture;
     woodChips: THREE.Texture;
     waterSplash: THREE.Texture;
+    auraBurst: THREE.Texture;
   };
 }
 
@@ -152,7 +164,7 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
   const loadOne = (file: string, isFP: boolean = false): Promise<THREE.Group> =>
     loadOneWithClips(file, isFP).then((r) => r.scene);
 
-  const loadFlipbook = (file: string): Promise<THREE.Texture> =>
+  const loadFlipbook = (file: string, gridN: number = 8): Promise<THREE.Texture> =>
     new Promise((resolve) => {
       texLoader.load(
         `./assets/effects/${file}`,
@@ -160,15 +172,15 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.wrapS = THREE.ClampToEdgeWrapping;
           tex.wrapT = THREE.ClampToEdgeWrapping;
-          tex.repeat.set(1 / 8, 1 / 8);
-          tex.offset.set(0, 7 / 8);
+          tex.repeat.set(1 / gridN, 1 / gridN);
+          tex.offset.set(0, (gridN - 1) / gridN);
           tex.needsUpdate = true;
           resolve(tex);
         },
         undefined,
         () => {
           const fallback = new THREE.Texture();
-          fallback.repeat.set(1 / 8, 1 / 8);
+          fallback.repeat.set(1 / gridN, 1 / gridN);
           resolve(fallback);
         }
       );
@@ -243,6 +255,15 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
     loadFlipbook('sand_puff_flipbook.png'),
     loadFlipbook('wood_chips_flipbook.png'),
     loadFlipbook('water_splash_flipbook.png'),
+    loadFlipbook('aura_burst_flipbook.png', 4),
+    loadOne('weapon_bow.glb', true),
+    loadOne('weapon_arrow.glb', true),
+    loadOne('weapon_fire_bomb.glb', true),
+    loadOne('weapon_flare_gun.glb', true),
+    loadOneWithClips('lavans_bali.glb', false),
+    loadOne('boss_arena_shore.glb', false),
+    loadOne('aura_shade.glb', false),
+    loadOne('aura_shockwave_ring.glb', false),
   ]).then(
     ([
       fpArmsRes,
@@ -313,6 +334,15 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
       fxSand,
       fxChips,
       fxSplash,
+      fxAuraBurst,
+      tBow,
+      tArrow,
+      tFireBomb,
+      tFlareGun,
+      bossLavansRes,
+      bossArenaShore,
+      bossShade,
+      bossRing,
     ]) => ({
       fpArms: fpArmsRes.scene,
       fpArmsAnimations: fpArmsRes.animations,
@@ -352,6 +382,17 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
         spear: tSpear,
         waterContainer: tWaterContainer,
         foodRation: tFoodRation,
+        bow: tBow,
+        arrow: tArrow,
+        fireBomb: tFireBomb,
+        flareGun: tFlareGun,
+      },
+      boss: {
+        lavansBali: bossLavansRes.scene,
+        lavansAnimations: bossLavansRes.animations,
+        arenaShore: bossArenaShore,
+        auraShade: bossShade,
+        shockwaveRing: bossRing,
       },
       campfire: {
         lit: cLit,
@@ -392,6 +433,7 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
         sandPuff: fxSand,
         woodChips: fxChips,
         waterSplash: fxSplash,
+        auraBurst: fxAuraBurst,
       },
     })
   );

@@ -2,26 +2,38 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { audio } from './audio/audio.ts';
 import {
+  DEFAULT_KEYBINDS,
   ExtendedGraphicsSettings,
   GraphicsQuality,
   loadExtendedGraphicsSettings,
   loadGraphicsQuality,
 } from './scene/GraphicsConfig.ts';
 import {
+  CombatHudStatus,
   HoveredTargetInfo,
   ScenePerformanceMetrics,
   SurvivalScene3D,
 } from './scene/SurvivalScene3D.ts';
 import {
+  BOSS_TUNING,
   HUD_TUNING,
   INVENTORY,
   NEEDS,
   PART5_IMMERSION_TUNING,
   SAVE,
   TIME,
+  VOYAGE,
   WILDLIFE,
   WORLD,
 } from './survival/config.ts';
+import {
+  applyPlayerDamageToBoss,
+  destroyBossCrystal,
+  detonateBossBarrel,
+  retryBossFromCheckpoint,
+  setBossCombatPhase,
+  startBossEncounter,
+} from './survival/boss.ts';
 import {
   createInitialSurvivalState,
   hitGatherNode,
@@ -29,6 +41,7 @@ import {
 } from './survival/gathering.ts';
 import {
   addItem,
+  countItem,
   damageSlotDurability,
   getEquipped,
   ITEM_DEFS,
@@ -71,6 +84,7 @@ import {
 } from './survival/structures.ts';
 import {
   BoatStageId,
+  BossDifficulty,
   ItemId,
   PlayerContext,
   SaveKind,
@@ -82,6 +96,7 @@ import {
 import {
   anchorRestAtStop,
   buildBoatStage,
+  isBoatReadyToLaunch,
   launchEscapeVoyage,
   refuelVoyageFromPack,
   repairVoyageHull,
@@ -135,6 +150,7 @@ export default function App() {
     []
   );
   const [isInventoryOpen, setIsInventoryOpen] = useState(false);
+  const [inventoryFocusMode, setInventoryFocusMode] = useState<'inventory' | 'craft'>('inventory');
   const [isBuildMenuOpen, setIsBuildMenuOpen] = useState(false);
   const [activeBuildType, setActiveBuildType] = useState<StructureType | null>(null);
   const [openChestId, setOpenChestId] = useState<string | null>(null);
@@ -183,6 +199,14 @@ export default function App() {
   const [fps, setFps] = useState<number>(0);
   const [damageFlash, setDamageFlash] = useState(false);
   const [causeOfDeath, setCauseOfDeath] = useState<string>('exposure');
+  const [combatHud, setCombatHud] = useState<CombatHudStatus>({
+    isBlocking: false,
+    heavyChargePct: 0,
+    bowDrawPct: 0,
+    dodgeCooldownPct: 0,
+    bossStaggered: false,
+    bossSubtitle: null,
+  });
 
   const statusTimerRef = useRef<number>(0);
   const saveBadgeTimerRef = useRef<number>(0);
@@ -191,6 +215,7 @@ export default function App() {
   const lastActToastRef = useRef<number>(initialLoad.state.act);
   const prevTideWaterRef = useRef<number>(WORLD.WATER_LEVEL);
   const lastTideWashHourRef = useRef<number>(-99);
+  const lastBossSubtitleRef = useRef<string | null>(null);
 
   const dismissTutorialHint = (hintId: string) => {
     setDismissedHints((prev) => {
@@ -267,7 +292,7 @@ export default function App() {
     sceneRef.current?.setBuildPreviewType(null);
   };
 
-  type ActivePanel = 'inventory' | 'build' | 'journal' | 'map' | 'chest' | 'forge' | 'boatDock';
+  type ActivePanel = 'inventory' | 'craft' | 'build' | 'journal' | 'map' | 'chest' | 'forge' | 'boatDock';
 
   const closeAllMenusAndLock = (options?: { relockPointer?: boolean }) => {
     setIsInventoryOpen(false);
@@ -283,11 +308,14 @@ export default function App() {
     }
   };
 
-  const openPanel = (panel: 'inventory' | 'build' | 'journal' | 'map') => {
+  const openPanel = (panel: 'inventory' | 'craft' | 'build' | 'journal' | 'map') => {
     sceneRef.current?.triggerActionAnimation('map_look');
     audio.playPaperRustle();
     cancelBuildMode();
-    setIsInventoryOpen(panel === 'inventory');
+    if (panel === 'inventory' || panel === 'craft') {
+      setInventoryFocusMode(panel);
+    }
+    setIsInventoryOpen(panel === 'inventory' || panel === 'craft');
     setIsBuildMenuOpen(panel === 'build');
     setIsBoatDockOpen(false);
     setOpenChestId(null);
@@ -306,14 +334,14 @@ export default function App() {
         : isBuildMenuOpen
           ? 'build'
           : isInventoryOpen
-            ? 'inventory'
+            ? inventoryFocusMode
             : journalTab === 'map'
               ? 'map'
               : journalTab !== null
                 ? 'journal'
                 : null;
 
-  const togglePanel = (panel: 'inventory' | 'build' | 'journal' | 'map') => {
+  const togglePanel = (panel: 'inventory' | 'craft' | 'build' | 'journal' | 'map') => {
     if (currentPanel === panel) {
       closeAllMenusAndLock({ relockPointer: true });
     } else {
@@ -733,6 +761,7 @@ export default function App() {
 
   const handlePrimaryActionRef = useRef(handlePrimaryAction);
   handlePrimaryActionRef.current = handlePrimaryAction;
+  const debugBossRef = useRef<() => void>(() => {});
 
   // Mount Three.js scene once
   useEffect(() => {
@@ -779,6 +808,155 @@ export default function App() {
         });
       },
     });
+    scene.setBossCallbacks({
+      onBossDamage: (rawDmg, isBurn, isWeakpoint) => {
+        setGameState((prev) => {
+          if (!prev.alive) return prev;
+          const res = applyPlayerDamageToBoss(prev, rawDmg, {
+            isHeavy: isWeakpoint,
+            isFireOrFlare: isBurn,
+          });
+          if (res.dealt > 0 && isWeakpoint) {
+            queueMicrotask(() =>
+              showStatus(`CRITICAL STRIKE! -${res.dealt} HP on The Aura King`)
+            );
+          }
+          if (res.triggeredPhase === 'phase2_cutscene') {
+            queueMicrotask(() => {
+              audio.setBossMusicState(true, 2);
+              showStatus('Phase 2: Shatter the 3 glowing Aura Crystals to break his shield!');
+            });
+          } else if (res.triggeredPhase === 'phase3_transition') {
+            queueMicrotask(() => {
+              audio.setBossMusicState(true, 3);
+              sceneRef.current?.teleportToBossArena(3);
+              showStatus('Phase 3: Final Storm Showdown aboard your Escape Boat!');
+            });
+          } else if (res.defeatedNow) {
+            queueMicrotask(() => {
+              audio.setBossMusicState(true, 'victory');
+              showStatus('FINAL BLOW! The Aura King shatters into golden dawn!');
+            });
+          }
+          return res.state;
+        });
+      },
+      onDestroyCrystal: (idx) => {
+        if (idx < 0 || idx > 2) return;
+        setGameState((prev) => {
+          const res = destroyBossCrystal(prev, idx as 0 | 1 | 2);
+          if (res.destroyed) {
+            queueMicrotask(() =>
+              showStatus(
+                res.allShattered
+                  ? 'All Aura Crystals shattered! Strike The Aura King NOW!'
+                  : `Aura Crystal #${idx + 1} shattered!`
+              )
+            );
+          }
+          return res.state;
+        });
+      },
+      onDetonateBarrel: (idx, bossDistM) => {
+        if (idx < 0 || idx > 3) return;
+        setGameState((prev) => {
+          const res = detonateBossBarrel(prev, idx as 0 | 1 | 2 | 3, bossDistM);
+          if (res.exploded) {
+            queueMicrotask(() =>
+              showStatus(
+                res.hitBoss
+                  ? `Fuel Barrel Detonated! (-${res.dealt} HP & Staggered The Aura King!)`
+                  : 'Flight 404 Fuel Barrel detonated!'
+              )
+            );
+          }
+          return res.state;
+        });
+      },
+      onBossDamagePlayer: (dmg) => {
+        if (dmg <= 0) return;
+        audio.playHurt();
+        triggerDamageFeedback();
+        setGameState((prev) => {
+          if (!prev.alive) return prev;
+          const nextHp = Math.max(0, prev.needs.health - dmg);
+          const died = nextHp <= 0;
+          if (died) {
+            queueMicrotask(() => {
+              audio.playDefeat();
+              audio.setBossMusicState(false, 1);
+              setCauseOfDeath('The Aura King');
+            });
+          }
+          return {
+            ...prev,
+            alive: !died,
+            stats: died ? { ...prev.stats, deaths: prev.stats.deaths + 1 } : prev.stats,
+            needs: { ...prev.needs, health: nextHp },
+          };
+        });
+      },
+      onAdvanceBossPhase: (nextPhase) => {
+        setGameState((prev) => setBossCombatPhase(prev, nextPhase));
+      },
+      onBossDefeatCutsceneDone: () => {
+        audio.setBossMusicState(false, 1);
+        audio.playVictoryFanfare();
+        audio.playArrivalTheme();
+        setGameState((prev) => {
+          const finished: SurvivalState = applyActPromotion({
+            ...prev,
+            act: 5,
+            weather: { kind: 'clear', rain: 0, wind: 0.14 },
+            clock: { ...prev.clock, hour: 6.25 },
+            escapedAtDay: prev.escapedAtDay ?? prev.clock.day,
+            escapedCity: true,
+            boss: {
+              ...prev.boss,
+              combatPhase: 'ended',
+              defeated: true,
+            },
+            voyage: {
+              ...prev.voyage,
+              phase: 'arrived',
+              distanceNm: VOYAGE.TOTAL_DISTANCE_NM,
+              targetNm: VOYAGE.TOTAL_DISTANCE_NM,
+              legIndex: 4,
+            },
+          });
+          writeSurvivalSave(finished, 'autosave');
+          return finished;
+        });
+        sceneRef.current?.setUiBlocked(true);
+        sceneRef.current?.unlockPointer();
+        showStatus('Port Solis reached at sunrise — The Aura King’s storm is broken!');
+      },
+      onConsumeCombatAmmo: (itemId) => {
+        const cur = stateRef.current;
+        const has = cur.inventory.some((s) => s?.itemId === itemId && s.count > 0);
+        if (!has) return false;
+        setGameState((prev) => ({
+          ...prev,
+          inventory: removeItem(prev.inventory, itemId, 1).inventory,
+        }));
+        return true;
+      },
+      onSpendCombatStamina: (amount) => {
+        setGameState((prev) =>
+          prev.alive
+            ? {
+                ...prev,
+                needs: {
+                  ...prev.needs,
+                  stamina: Math.max(0, prev.needs.stamina - amount),
+                },
+              }
+            : prev
+        );
+      },
+      onCombatStatus: (msg) => showStatus(msg),
+    });
+
     scene.setCallbacks({
       onPrimaryAction: (t) => handlePrimaryActionRef.current(t),
       onOpenCampfireCraft: () => openPanel('inventory'),
@@ -837,6 +1015,23 @@ export default function App() {
       if (!scene) return;
 
       const runtime = scene.getPlayerRuntimeSnapshot();
+      const nextHud = scene.getCombatHudStatus();
+      setCombatHud((prev) =>
+        prev.isBlocking === nextHud.isBlocking &&
+        Math.abs(prev.heavyChargePct - nextHud.heavyChargePct) < 0.02 &&
+        Math.abs(prev.bowDrawPct - nextHud.bowDrawPct) < 0.02 &&
+        Math.abs(prev.dodgeCooldownPct - nextHud.dodgeCooldownPct) < 0.02 &&
+        prev.bossStaggered === nextHud.bossStaggered &&
+        prev.bossSubtitle === nextHud.bossSubtitle
+          ? prev
+          : nextHud
+      );
+      if (nextHud.bossSubtitle !== lastBossSubtitleRef.current) {
+        lastBossSubtitleRef.current = nextHud.bossSubtitle;
+        if (nextHud.bossSubtitle) {
+          audio.playBossVoice(nextHud.bossSubtitle);
+        }
+      }
       setHoveredTarget(scene.hoveredTarget ? { ...scene.hoveredTarget } : null);
       setPlayerContext(runtime.context);
       setPlayerYaw(runtime.yaw);
@@ -926,20 +1121,30 @@ export default function App() {
           ambientC,
           nextWeather,
           runtime.context,
-          prev.difficulty
+          prev.difficulty,
+          nextClock
         );
 
-        // 2b. Tick Island Wildlife AI & Fauna Attacks
+        // 2b. Tick Island Wildlife AI & Fauna Attacks (paused during final boss encounter)
         const isNight =
           nextClock.hour >= TIME.NIGHT_START_HOUR || nextClock.hour < TIME.DAY_START_HOUR;
-        const aiRes = tickWildlifeAI(
-          prev.wildlife ?? [],
-          { x: runtime.x, z: runtime.z },
-          nextClock.totalHours,
-          dtSec,
-          isNight,
-          prev.difficulty
-        );
+        const bossEncounterOngoing =
+          prev.boss.combatPhase !== 'inactive' && prev.boss.combatPhase !== 'ended';
+        const aiRes = bossEncounterOngoing
+          ? {
+              wildlife: prev.wildlife ?? [],
+              damageToPlayer: 0,
+              poisonedPlayer: false,
+              attackerMessage: null as string | null,
+            }
+          : tickWildlifeAI(
+              prev.wildlife ?? [],
+              { x: runtime.x, z: runtime.z },
+              nextClock.totalHours,
+              dtSec,
+              isNight,
+              prev.difficulty
+            );
         let nextNeeds = needRes.needs;
         let diedByAnimal = false;
         if (aiRes.damageToPlayer > 0 && !needRes.died) {
@@ -1033,9 +1238,22 @@ export default function App() {
         if (totalDead) {
           queueMicrotask(() => {
             audio.playDefeat();
+            audio.setBossMusicState(false, 1);
             setCauseOfDeath(needRes.causeOfDeath ?? 'wildlife');
           });
         }
+
+        const bossActiveCombat =
+          prev.boss.combatPhase === 'phase1' ||
+          prev.boss.combatPhase === 'phase2' ||
+          prev.boss.combatPhase === 'phase3_boat';
+        const nextBoss = bossActiveCombat
+          ? {
+              ...prev.boss,
+              fightElapsedSec: prev.boss.fightElapsedSec + dtSec,
+              staggeredSec: Math.max(0, prev.boss.staggeredSec - dtSec),
+            }
+          : prev.boss;
 
         const nextCandidate: SurvivalState = {
           ...prev,
@@ -1047,6 +1265,7 @@ export default function App() {
           nodes: nextNodes,
           structures: nextStructures,
           wildlife: aiRes.wildlife,
+          boss: nextBoss,
           discoveredCells: nextCells,
           player: {
             x: runtime.x,
@@ -1084,7 +1303,9 @@ export default function App() {
     return () => window.clearTimeout(tid);
   }, [screen]);
 
-  // Global keyboard shortcuts (Hotbar 1–6, [B] Build, [Tab]/[I]/[C] Craft, [J] Journal, [M] Map, [H] Hints, [F] Consume, [F3] Perf Overlay, [Esc])
+  // Global keyboard shortcuts — unique non-overlapping keys:
+  // [1–6] Hotbar, [B] Build, [R] Rotate Build, [Tab] Craft, [I] Inventory, [J] Journal, [M] Map,
+  // [F] Inspect (rebindable), [G] Consume Food/Water/Medicine, [H] Hide/Show Hints, [F3] Perf Overlay, [Esc] Pause/Close
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (screen !== 'playing' || !stateRef.current.alive) return;
@@ -1102,6 +1323,12 @@ export default function App() {
         return;
       }
 
+      if (e.code === 'F8') {
+        e.preventDefault();
+        debugBossRef.current();
+        return;
+      }
+
       if (isPaused) {
         if (e.code === 'Escape') {
           e.preventDefault();
@@ -1110,31 +1337,39 @@ export default function App() {
         return;
       }
 
-      if (e.code === 'Tab' || e.code === 'KeyI') {
+      const kb = extSettings.keybinds ?? DEFAULT_KEYBINDS;
+
+      if (e.code === kb.craft) {
+        e.preventDefault();
+        togglePanel('craft');
+        return;
+      }
+
+      if (e.code === kb.inventory) {
         e.preventDefault();
         togglePanel('inventory');
         return;
       }
 
-      if (e.code === 'KeyB') {
+      if (e.code === kb.build) {
         e.preventDefault();
         togglePanel('build');
         return;
       }
 
-      if (e.code === 'KeyR' && activeBuildType && !isUiModalOpen) {
+      if (e.code === (kb.throwBomb ?? DEFAULT_KEYBINDS.throwBomb) && activeBuildType && !isUiModalOpen) {
         e.preventDefault();
         sceneRef.current?.rotateBuildPreview();
         return;
       }
 
-      if (e.code === 'KeyJ') {
+      if (e.code === kb.journal) {
         e.preventDefault();
         togglePanel('journal');
         return;
       }
 
-      if (e.code === 'KeyM') {
+      if (e.code === kb.map) {
         e.preventDefault();
         togglePanel('map');
         return;
@@ -1162,35 +1397,28 @@ export default function App() {
         return;
       }
 
-      if (e.code === 'KeyF' && !isUiModalOpen) {
-        const equipped = getEquipped(stateRef.current.inventory, stateRef.current.selectedSlot);
-        const isConsumable =
-          !e.shiftKey &&
-          equipped.def !== null &&
-          (equipped.def.food !== undefined || equipped.def.id === 'medicinal_poultice');
-        if (isConsumable) {
-          handleConsumeSlot(stateRef.current.selectedSlot);
-        } else {
-          const inspecting = sceneRef.current?.toggleInspectItem() ?? false;
-          if (inspecting) {
-            showStatus(`Inspecting ${equipped.def?.name ?? 'Hands'} [F / T]`);
-          }
-        }
-        return;
-      }
-
-      if (e.code === 'KeyT' && !isUiModalOpen) {
+      const inspectKey = kb.inspect ?? DEFAULT_KEYBINDS.inspect;
+      if (e.code === inspectKey && !isUiModalOpen) {
+        e.preventDefault();
         const equipped = getEquipped(stateRef.current.inventory, stateRef.current.selectedSlot);
         const inspecting = sceneRef.current?.toggleInspectItem() ?? false;
         if (inspecting) {
-          showStatus(`Inspecting ${equipped.def?.name ?? 'Hands'} [T]`);
+          const keyLabel = inspectKey.replace('Key', '');
+          showStatus(`Inspecting ${equipped.def?.name ?? 'Hands'} [${keyLabel}]`);
         }
         return;
       }
 
-      if (e.code === 'KeyH' && !isUiModalOpen) {
+      const consumeKey = kb.consume ?? DEFAULT_KEYBINDS.consume;
+      if (e.code === consumeKey && !isUiModalOpen) {
         e.preventDefault();
-        setShowControlsHint((prev) => !prev);
+        const equipped = getEquipped(stateRef.current.inventory, stateRef.current.selectedSlot);
+        if (equipped.def && (equipped.def.food !== undefined || equipped.def.id === 'medicinal_poultice')) {
+          handleConsumeSlot(stateRef.current.selectedSlot);
+        } else {
+          showStatus(`Select food, water, or medicine on hotbar [1–6] and press [${consumeKey.replace('Key', '')}] to consume.`);
+        }
+        return;
       }
     };
 
@@ -1202,6 +1430,7 @@ export default function App() {
     currentPanel,
     activeBuildType,
     isUiModalOpen,
+    extSettings.keybinds,
   ]);
 
   const handleConsumeSlot = (slotIdx: number) => {
@@ -1360,7 +1589,20 @@ export default function App() {
   };
 
   const handleLaunchVoyage = () => {
-    const res = launchEscapeVoyage(stateRef.current);
+    const cur = stateRef.current;
+    if (cur.act >= 4 && isBoatReadyToLaunch(cur.boat) && !cur.boss.defeated) {
+      const encounterState = startBossEncounter(cur, cur.bossDifficulty, 1);
+      audio.playThunder();
+      audio.setBossMusicState(true, 1);
+      setIsBoatDockOpen(false);
+      sceneRef.current?.setUiBlocked(false);
+      sceneRef.current?.lockPointer();
+      sceneRef.current?.teleportToBossArena(1);
+      commitAndSave(encounterState, 'autosave', 'Aura King Showdown');
+      showStatus('The Aura King rises to block your escape!');
+      return;
+    }
+    const res = launchEscapeVoyage(cur);
     if (res.ok) {
       audio.playBuild();
       setIsBoatDockOpen(false);
@@ -1368,6 +1610,107 @@ export default function App() {
     }
     showStatus(res.message);
   };
+
+  const handleChangeBossDifficulty = (nextDiff: BossDifficulty) => {
+    setGameState((prev) => ({
+      ...prev,
+      bossDifficulty: nextDiff,
+      boss: {
+        ...prev.boss,
+        difficulty: nextDiff,
+      },
+    }));
+    showStatus(`Showdown Difficulty set to ${nextDiff.toUpperCase()}.`);
+  };
+
+  const handleRetryBossCheckpoint = (fromPhaseOne: boolean) => {
+    const retried = retryBossFromCheckpoint(stateRef.current, fromPhaseOne);
+    commitAndSave(retried, 'autosave', 'Checkpoint Retry');
+    audio.setBossMusicState(true, retried.boss.phase);
+    sceneRef.current?.teleportToBossArena(retried.boss.phase);
+    sceneRef.current?.setUiBlocked(false);
+    sceneRef.current?.lockPointer();
+    showStatus(
+      retried.boss.phase === 1
+        ? 'Restarted Showdown at Western Cliff Sanctum (Phase 1).'
+        : `Retrying The Aura King at Phase ${retried.boss.phase} Checkpoint!`
+    );
+  };
+
+  const handleDebugStartBossFight = () => {
+    const cur = stateRef.current;
+    const grants: Array<[ItemId, number]> = [
+      ['machete', 1],
+      ['bow', 1],
+      ['flare_gun', 1],
+      ['fire_bomb', 6],
+      ['spear', 1],
+      ['medicinal_poultice', 4],
+      ['arrow', 36],
+      ['flare_ammo', 8],
+      ['cooked_fish', 4],
+      ['water_bottle_clean', 2],
+    ];
+    let inv = cur.inventory;
+    for (const [id, needed] of grants) {
+      const have = countItem(inv, id);
+      if (have < needed) {
+        inv = addItem(inv, id, needed - have).inventory;
+      }
+    }
+    const macheteIdx = inv.findIndex((s) => s?.itemId === 'machete');
+    const bowIdx = inv.findIndex((s) => s?.itemId === 'bow');
+    const prepared: SurvivalState = {
+      ...cur,
+      act: 4,
+      inventory: inv,
+      selectedSlot: macheteIdx >= 0 ? macheteIdx : bowIdx >= 0 ? bowIdx : cur.selectedSlot,
+      needs: {
+        ...cur.needs,
+        health: 100,
+        hunger: 100,
+        thirst: 100,
+        stamina: 100,
+        temperature: 36.8,
+        wetness: 0,
+        sickness: 0,
+        sicknessCause: undefined,
+      },
+      stationRepairs: { radio: true, generator: true, chart: true },
+      boat: {
+        keel_hull: true,
+        mast_sail: true,
+        outboard_engine: true,
+        nav_provisions: true,
+      },
+      voyage: {
+        ...cur.voyage,
+        phase: 'docked',
+      },
+      flags: {
+        ...cur.flags,
+        repair_radio: true,
+        repair_generator: true,
+        repair_chart: true,
+      },
+    };
+    const started = startBossEncounter(prepared, cur.bossDifficulty ?? 'normal', 1);
+    setIsInventoryOpen(false);
+    setIsBuildMenuOpen(false);
+    setIsBoatDockOpen(false);
+    setOpenChestId(null);
+    setOpenForgeId(null);
+    cancelBuildMode();
+    setJournalTab(null);
+    setIsPaused(false);
+    commitAndSave(started, 'autosave', 'Boss Showdown');
+    audio.setBossMusicState(true, 1);
+    sceneRef.current?.teleportToBossArena(1);
+    sceneRef.current?.setUiBlocked(false);
+    sceneRef.current?.lockPointer();
+    showStatus('SHOWDOWN: The Aura King blocks your escape!');
+  };
+  debugBossRef.current = handleDebugStartBossFight;
 
   const handleSetThrottle = (throttle: VoyageThrottle) => {
     setGameState((prev) => setVoyageThrottle(prev, throttle));
@@ -1518,6 +1861,7 @@ export default function App() {
   const handleStartNewGame = (difficulty: 'survivor' | 'hardcore') => {
     const fresh = createInitialSurvivalState(difficulty);
     lastActToastRef.current = fresh.act;
+    audio.setBossMusicState(false, 1);
     commitAndSave(fresh, 'autosave', 'New Game Saved');
     setIsInventoryOpen(false);
     setIsBuildMenuOpen(false);
@@ -1535,6 +1879,7 @@ export default function App() {
 
   const handleRespawn = () => {
     const respawned = respawnAtLastBed(gameState);
+    audio.setBossMusicState(false, 1);
     commitAndSave(respawned, 'bed', 'Respawn Saved');
     sceneRef.current?.snapPlayerToGround(
       respawned.player.x,
@@ -1569,7 +1914,7 @@ export default function App() {
     ) {
       return {
         id: 'craft_fire',
-        text: 'Tip: Open Crafting [Tab/I] or Build [B] to kindle a Stone Campfire before nightfall.',
+        text: 'Tip: Open Crafting [Tab] or Build [B] to kindle a Stone Campfire before nightfall.',
       };
     }
     if (
@@ -1606,7 +1951,10 @@ export default function App() {
           extSettings={extSettings}
           onChangeGraphicsQuality={handleChangeGraphicsQuality}
           onChangeExtendedSettings={handleChangeExtendedSettings}
-          onContinue={() => setScreen('playing')}
+          onContinue={() => {
+            setScreen('playing');
+            sceneRef.current?.setUiBlocked(false);
+          }}
           onStartNew={handleStartNewGame}
         />
       )}
@@ -1656,7 +2004,7 @@ export default function App() {
           onToggleControlsHint={() => setShowControlsHint((prev) => !prev)}
           onSelectSlot={(idx) => setGameState((prev) => ({ ...prev, selectedSlot: idx }))}
           onUseSelected={() => handleConsumeSlot(gameState.selectedSlot)}
-          onOpenInventory={() => openPanel('inventory')}
+          onOpenInventory={() => openPanel('craft')}
           onOpenBuild={() => openPanel('build')}
           onCancelBuild={cancelBuildMode}
           onOpenJournal={() => openPanel('journal')}
@@ -1678,6 +2026,8 @@ export default function App() {
           onDebugAdvanceTime={() => handleDebugAdvanceTime(4)}
           onDebugCycleWeather={handleDebugCycleWeather}
           onDebugFastSail={handleDebugFastSail}
+          onDebugStartBossFight={handleDebugStartBossFight}
+          combatHud={combatHud}
         />
       )}
 
@@ -1696,6 +2046,7 @@ export default function App() {
           onResumeLeg={handleResumeVoyageLeg}
           onReturnToDock={handleReturnToIslandDock}
           onConsumeItemSlot={handleConsumeSlot}
+          onChangeBossDifficulty={handleChangeBossDifficulty}
         />
       )}
 
@@ -1768,6 +2119,7 @@ export default function App() {
 
       <InventoryCraftModal
         isOpen={isInventoryOpen}
+        focusMode={inventoryFocusMode}
         state={gameState}
         nearbyStations={nearbyStations}
         onClose={() => closeAllMenusAndLock({ relockPointer: true })}
@@ -1796,7 +2148,17 @@ export default function App() {
         extSettings={extSettings}
         onChangeGraphicsQuality={handleChangeGraphicsQuality}
         onChangeExtendedSettings={handleChangeExtendedSettings}
+        onChangeBossDifficulty={handleChangeBossDifficulty}
         onResume={() => closeAllMenusAndLock({ relockPointer: true })}
+        onSaveGame={() => commitAndSave(stateRef.current, 'autosave', 'Game Saved')}
+        onQuitToTitle={() => {
+          commitAndSave(stateRef.current, 'autosave', 'Game Saved');
+          closeAllMenusAndLock({ relockPointer: false });
+          setIsPaused(false);
+          sceneRef.current?.setUiBlocked(true);
+          sceneRef.current?.unlockPointer();
+          setScreen('title');
+        }}
         onRestart={() => handleStartNewGame(gameState.difficulty)}
       />
 
@@ -1805,6 +2167,7 @@ export default function App() {
         causeOfDeath={causeOfDeath}
         state={gameState}
         onRespawn={handleRespawn}
+        onRetryBossCheckpoint={handleRetryBossCheckpoint}
         onRestart={() => handleStartNewGame(gameState.difficulty)}
       />
     </div>

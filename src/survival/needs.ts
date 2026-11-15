@@ -124,6 +124,9 @@ export function stepWeather(
   }
 
   // Deterministic atmospheric cycle across in-game hours so storms roll in naturally
+  if (totalHours < TEMPERATURE.DAY1_CLEAR_WEATHER_HOURS) {
+    return { kind: 'clear', rain: 0, wind: 0.15 };
+  }
   const wave = Math.sin(totalHours * 0.23) + 0.5 * Math.cos(totalHours * 0.61);
   let kind: WeatherKind = 'clear';
   let rain = 0;
@@ -240,8 +243,12 @@ export function getBodyTempStage(tempC: number): BodyTempStageInfo {
 export function computeTargetBodyTempC(
   ambientC: number,
   ctx: PlayerContext,
-  wetness: number
+  wetness: number,
+  clock?: Pick<GameClock, 'day' | 'hour'>,
+  weather?: Pick<WeatherState, 'kind' | 'rain' | 'wind'>
 ): number {
+  const isNight = clock ? isNightHour(clock.hour) : ambientC < TEMPERATURE.NIGHT_INFER_AMBIENT_C;
+  const rain = weather?.rain ?? 0;
   let effectiveAmbient = ambientC;
 
   if (ctx.nearFire) {
@@ -252,27 +259,56 @@ export function computeTargetBodyTempC(
     effectiveAmbient += TEMPERATURE.TORCH_WARMTH_C;
   }
   if (ctx.sheltered) {
-    effectiveAmbient += TEMPERATURE.SHELTER_WARMTH_C * (ctx.stance === 'sit' || ctx.stance === 'sleep' ? 1.25 : 1.0);
+    effectiveAmbient +=
+      TEMPERATURE.SHELTER_WARMTH_C * (ctx.stance === 'sit' || ctx.stance === 'sleep' ? 1.25 : 1.0);
+  } else if (isNight && !ctx.nearFire) {
+    effectiveAmbient -= TEMPERATURE.NIGHT_EXPOSURE_PENALTY_C;
   }
   if (wetness > 0) {
     effectiveAmbient -= (wetness / 100) * TEMPERATURE.WET_CHILL_C;
   }
 
+  let target = TEMPERATURE.NORMAL_BODY_C;
   if (effectiveAmbient < TEMPERATURE.COMFORT_MIN_C) {
     const wetPenalty = !ctx.nearFire ? (wetness / 100) * TEMPERATURE.WET_MAX_PENALTY_C : 0;
     const raw =
       TEMPERATURE.NORMAL_BODY_C -
       (TEMPERATURE.COMFORT_MIN_C - effectiveAmbient) * TEMPERATURE.COLD_TARGET_SLOPE -
       wetPenalty;
-    return Math.max(TEMPERATURE.MIN_BODY_C, raw);
-  }
-  if (effectiveAmbient > TEMPERATURE.COMFORT_MAX_C) {
+    target = Math.max(TEMPERATURE.MIN_BODY_C, raw);
+  } else if (effectiveAmbient > TEMPERATURE.COMFORT_MAX_C) {
     const raw =
       TEMPERATURE.NORMAL_BODY_C +
       (effectiveAmbient - TEMPERATURE.COMFORT_MAX_C) * TEMPERATURE.HEAT_TARGET_SLOPE;
-    return Math.min(TEMPERATURE.MAX_BODY_C, raw);
+    target = Math.min(TEMPERATURE.MAX_BODY_C, raw);
   }
-  return TEMPERATURE.NORMAL_BODY_C;
+
+  // Daytime comfortable stabilization even when cool morning/overcast (unless swimming or active rain soak)
+  if (!isNight && !ctx.isSwimming) {
+    if (rain <= 0 && wetness <= 30) {
+      target = Math.max(target, TEMPERATURE.DAYLIGHT_COMFORT_FLOOR_C);
+    } else if (!ctx.sheltered && !ctx.nearFire) {
+      // Daytime rain soaked without shelter chills gradually into mild Cold, never Hypothermic
+      target = Math.min(
+        Math.max(target, TEMPERATURE.NORMAL_BODY_C - TEMPERATURE.COOL_RATE_DAY_RAIN_MAX_DROP),
+        rain > 0 && wetness >= 40
+          ? TEMPERATURE.NORMAL_BODY_C - TEMPERATURE.COOL_RATE_DAY_RAIN_MAX_DROP
+          : target
+      );
+    }
+  }
+
+  // Exposed clear night slowly cools toward Cold over the full night without causing instant hypothermia
+  if (isNight && !ctx.nearFire && !ctx.sheltered && !ctx.holdingLitTorch) {
+    const clearNightCap = TEMPERATURE.NORMAL_BODY_C - TEMPERATURE.COOL_RATE_CLEAR_NIGHT_MAX_DROP;
+    if (rain <= 0 && !ctx.isSwimming && wetness < 20) {
+      target = Math.max(clearNightCap, Math.min(target, clearNightCap + 0.15));
+    } else if (weather?.kind === 'storm' && wetness > 50) {
+      target = Math.min(target, TEMPERATURE.MIN_BODY_C);
+    }
+  }
+
+  return Math.round(target * 100) / 100;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +321,8 @@ export function tickNeeds(
   ambientC: number,
   weather: WeatherState,
   ctx: PlayerContext,
-  difficulty: 'survivor' | 'hardcore' = 'survivor'
+  difficulty: 'survivor' | 'hardcore' = 'survivor',
+  clock?: Pick<GameClock, 'day' | 'hour'>
 ): { needs: Needs; died: boolean; causeOfDeath?: string } {
   if (realDtSec <= 0) return { needs, died: needs.health <= 0 };
 
@@ -359,16 +396,56 @@ export function tickNeeds(
       dtMin * NEEDS.THIRST_DRAIN_PER_MIN * sprintMult * heatMult * sickMult * diff.drainMult
   );
 
-  // 5. Body temperature (clamped 32.0°C to 41.5°C, with warming/cooling trend)
-  const targetBodyC = computeTargetBodyTempC(ambientC, ctx, next.wetness);
+  // 5. Body temperature (smooth linear drift using explicit config warm/cool rates)
+  const targetBodyC = computeTargetBodyTempC(ambientC, ctx, next.wetness, clock, weather);
   const tempDiff = targetBodyC - next.temperature;
-  next.tempTrend = tempDiff > 0.08 ? 'warming' : tempDiff < -0.08 ? 'cooling' : 'stable';
-  const blend = Math.min(1, realDtSec * TEMPERATURE.BODY_DRIFT_RATE);
-  const blendedTemp = next.temperature + tempDiff * blend;
-  next.temperature =
-    Math.round(
-      Math.max(TEMPERATURE.MIN_BODY_C, Math.min(TEMPERATURE.MAX_BODY_C, blendedTemp)) * 100
-    ) / 100;
+  next.tempTrend = tempDiff > 0.04 ? 'warming' : tempDiff < -0.04 ? 'cooling' : 'stable';
+
+  const isNight = clock ? isNightHour(clock.hour) : ambientC < TEMPERATURE.NIGHT_INFER_AMBIENT_C;
+  let steppedTemp = next.temperature;
+  if (tempDiff > 0) {
+    let warmRate = TEMPERATURE.WARM_RATE_DRY_DAY_C_PER_SEC;
+    if (ctx.nearFire) {
+      const sitMult = ctx.stance === 'sit' ? STANCE_TUNING.SIT_NEAR_FIRE_WARMTH_MULT : 1.0;
+      warmRate = TEMPERATURE.WARM_RATE_FIRE_C_PER_SEC * sitMult + (ctx.sheltered ? 0.5 * TEMPERATURE.WARM_RATE_SHELTER_C_PER_SEC : 0);
+    } else if (ctx.sheltered) {
+      warmRate = TEMPERATURE.WARM_RATE_SHELTER_C_PER_SEC;
+    } else if (ctx.holdingLitTorch) {
+      warmRate = TEMPERATURE.WARM_RATE_TORCH_C_PER_SEC;
+    }
+    steppedTemp = Math.min(targetBodyC, next.temperature + warmRate * realDtSec);
+  } else if (tempDiff < 0) {
+    let coolRate = 0;
+    if (isNight && !ctx.nearFire) {
+      let nightContribution = TEMPERATURE.COOL_RATE_NIGHT_C_PER_SEC;
+      if (ctx.sheltered) nightContribution *= 1 - TEMPERATURE.SHELTER_NIGHT_CHILL_REDUCTION;
+      if (ctx.holdingLitTorch) nightContribution *= 1 - TEMPERATURE.TORCH_CHILL_MITIGATION;
+      coolRate += nightContribution;
+    }
+    if (weather.rain > 0 && !ctx.sheltered) {
+      coolRate += weather.rain * TEMPERATURE.COOL_RATE_RAIN_C_PER_SEC;
+    }
+    if (!ctx.nearFire && next.wetness > 0) {
+      coolRate += (next.wetness / 100) * TEMPERATURE.COOL_RATE_WET_C_PER_SEC;
+    }
+    if (!ctx.sheltered && weather.wind > 0.25 && ambientC < 22) {
+      coolRate += ((weather.wind - 0.25) / 0.75) * TEMPERATURE.COOL_RATE_WIND_C_PER_SEC;
+    }
+    if (ctx.isSwimming) {
+      coolRate += TEMPERATURE.COOL_RATE_SWIM_C_PER_SEC;
+    }
+    if (isNight && weather.kind === 'storm' && !ctx.sheltered && !ctx.nearFire && next.wetness > 40) {
+      coolRate += TEMPERATURE.COOL_RATE_STORM_NIGHT_C_PER_SEC;
+    }
+    coolRate = Math.max(TEMPERATURE.COOL_RATE_BASE_C_PER_SEC, coolRate);
+    steppedTemp = Math.max(targetBodyC, next.temperature - coolRate * realDtSec);
+  }
+
+  // Grace period: Day 1 cannot drop below "Chilly" (>= 35.5°C).
+  // Keep full floating-point precision so gradual rates never stall under high-FPS ticks.
+  const dayMinFloor =
+    (clock?.day ?? 2) <= 1 ? TEMPERATURE.DAY1_MIN_BODY_C : TEMPERATURE.MIN_BODY_C;
+  next.temperature = Math.max(dayMinFloor, Math.min(TEMPERATURE.MAX_BODY_C, steppedTemp));
 
   // 6. Health drain / recovery
   let healthDelta = 0;
@@ -662,6 +739,10 @@ export function respawnAtLastBed(state: SurvivalState): SurvivalState {
             seaEventText: null,
           }
         : state.voyage,
+    boss:
+      state.boss && !state.boss.defeated && state.boss.combatPhase !== 'inactive'
+        ? { ...state.boss, combatPhase: 'inactive', shades: [], staggeredSec: 0, subtitleText: null }
+        : state.boss,
     stats: {
       ...state.stats,
       deaths: state.stats.deaths + 1,

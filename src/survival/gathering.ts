@@ -4,12 +4,15 @@
  */
 
 import {
+  BOSS_TUNING,
   NEEDS,
   NODE_RESPAWN_HOURS,
+  SAVE,
   TIME,
   TOOL_POWER,
   WORLD,
 } from './config.ts';
+import { createInitialBossState } from './boss.ts';
 import {
   addItem,
   createEmptyInventory,
@@ -245,6 +248,7 @@ export function generateIslandNodes(
   const nearImportantSpot = (x: number, z: number) =>
     Math.hypot(x - WORLD.PLAYER_SPAWN.x, z - WORLD.PLAYER_SPAWN.z) < 7.0 ||
     Math.hypot(x - WORLD.BOAT_DOCK_POS.x, z - WORLD.BOAT_DOCK_POS.z) < 8.5 ||
+    Math.hypot(x - BOSS_TUNING.ARENA_CENTER_X, z - BOSS_TUNING.ARENA_CENTER_Z) < 14.5 ||
     Math.hypot(x - WORLD.SPRING_POS.x, z - WORLD.SPRING_POS.z) < 6.0 ||
     Math.hypot(x - WORLD.ABANDONED_CAMP_POS.x, z - WORLD.ABANDONED_CAMP_POS.z) < 7.0 ||
     Math.hypot(x - WORLD.RESEARCH_STATION_POS.x, z - WORLD.RESEARCH_STATION_POS.z) < 8.0 ||
@@ -599,7 +603,7 @@ export function createInitialSurvivalState(
   const spawnY = Math.max(0.5, sampleIslandHeight(spawnX, spawnZ, WORLD.ISLAND_RADIUS));
 
   return {
-    version: 1,
+    version: SAVE.VERSION,
     act: 1,
     difficulty,
     needs: {
@@ -634,6 +638,9 @@ export function createInitialSurvivalState(
     wildlife: generateInitialWildlife(WORLD.SEED + 77, WORLD.ISLAND_RADIUS),
     boat: createInitialBoatState(),
     voyage: createInitialVoyageState(),
+    bossDifficulty: 'normal',
+    boss: createInitialBossState('normal'),
+    achievements: [],
     escapedCity: false,
     discoveredCells: revealMapAround([], spawnX, spawnZ),
     player: { x: spawnX, y: spawnY, z: spawnZ, yaw: 0 },
@@ -645,6 +652,7 @@ export function createInitialSurvivalState(
       distanceTravelled: 0,
       deaths: 0,
       playTimeSec: 0,
+      bossFightTimeSec: 0,
     },
     lastSavedAt: null,
     lastSaveKind: null,

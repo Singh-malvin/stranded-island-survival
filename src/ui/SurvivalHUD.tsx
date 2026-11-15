@@ -1,32 +1,30 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  CloudRain,
-  CloudLightning,
   Flame,
   Heart,
   Droplets,
   Utensils,
   Zap,
   Thermometer,
-  Backpack,
-  BookOpen,
-  Map as MapIcon,
   Home,
   Hammer,
   Save,
-  Volume2,
-  VolumeX,
-  Pause,
-  Sun,
-  Moon,
-  Compass,
   AlertTriangle,
   Camera,
   Wind,
+  Shield,
+  Swords,
+  Waves,
 } from 'lucide-react';
-import { HoveredTargetInfo, ScenePerformanceMetrics } from '../scene/SurvivalScene3D.ts';
 import {
+  CombatHudStatus,
+  HoveredTargetInfo,
+  ScenePerformanceMetrics,
+} from '../scene/SurvivalScene3D.ts';
+import {
+  BOSS_TUNING,
   GRAPHICS_TUNING,
+  HUD_TUNING,
   INVENTORY,
   PART5_IMMERSION_TUNING,
   TEMPERATURE,
@@ -34,7 +32,7 @@ import {
 } from '../survival/config.ts';
 import { getEquipped, getInitialDurability, ITEM_DEFS } from '../survival/items.ts';
 import { FloatingItemTooltip, HoverTooltipData } from './ItemTooltip.tsx';
-import { computeAmbientTempC, formatClock, getBodyTempStage } from '../survival/needs.ts';
+import { getBodyTempStage } from '../survival/needs.ts';
 import {
   evaluateObjectivesForAct,
   getActLabel,
@@ -99,6 +97,8 @@ interface SurvivalHUDProps {
   onDebugAdvanceTime?: () => void;
   onDebugCycleWeather?: () => void;
   onDebugFastSail?: () => void;
+  onDebugStartBossFight?: () => void;
+  combatHud?: CombatHudStatus;
 }
 
 export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
@@ -127,29 +127,40 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
   onTogglePhotoMode,
   onChangePhotoFilter,
   onCapturePhoto,
-  isMuted,
-  showControlsHint = true,
-  onToggleControlsHint,
   onSelectSlot,
   onUseSelected,
-  onOpenInventory,
-  onOpenBuild,
   onCancelBuild,
-  onOpenJournal,
-  onOpenMap,
-  onTogglePause,
-  onToggleMute,
   onDebugTeleport,
   onDebugGrantSupplies,
   onDebugStage6Setup,
   onDebugAdvanceTime,
   onDebugCycleWeather,
   onDebugFastSail,
+  onDebugStartBossFight,
+  combatHud,
 }) => {
   const [hotbarHover, setHotbarHover] = useState<HoverTooltipData | null>(null);
-  const { needs, clock, weather, inventory, selectedSlot } = state;
-  const clockInfo = formatClock(clock);
-  const ambientC = computeAmbientTempC(clock, weather);
+  const [vitalsActive, setVitalsActive] = useState<boolean>(true);
+  const [compassActive, setCompassActive] = useState<boolean>(true);
+  const [areaBanner, setAreaBanner] = useState<{ name: string; id: string } | null>(null);
+
+  const prevVitalsRef = useRef({
+    health: state.needs.health,
+    hunger: state.needs.hunger,
+    thirst: state.needs.thirst,
+    stamina: state.needs.stamina,
+    temperature: state.needs.temperature,
+  });
+  const vitalsTimerRef = useRef<number | null>(null);
+  const prevYawRef = useRef<number>(playerYaw);
+  const compassTimerRef = useRef<number | null>(null);
+  const prevZoneIdRef = useRef<string | null>(null);
+  const areaTimerRef = useRef<number | null>(null);
+
+  const { needs, weather, inventory, selectedSlot, boss } = state;
+  const bossActive = boss.combatPhase !== 'inactive' && boss.combatPhase !== 'ended';
+  const crystalsLeft = boss.crystalsAlive.filter(Boolean).length;
+  const activeSubtitle = combatHud?.bossSubtitle ?? boss.subtitleText;
   const equipped = getEquipped(inventory, selectedSlot);
   const currentZone = ISLAND_ZONES[getZoneAt(state.player.x, state.player.z)];
 
@@ -167,20 +178,108 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
   const currentObjective = activeStep
     ? {
         title: activeStep.title,
-        detail: activeStep.detail,
         progress: activeStep.progressText,
       }
     : {
-        title: state.act >= 4 ? 'Prepare the Escape Boat (Act 4)' : 'Advance to Next Island Act',
-        detail:
-          state.act >= 4
-            ? 'All island secrets & station repairs complete — build your escape vessel next.'
-            : 'Complete the active milestone or push further inland.',
+        title: state.act >= 4 ? 'Prepare Escape Boat' : 'Explore the Island',
         progress: `${completedSteps}/${actSteps.length}`,
       };
 
-  // Needs bars fade subtly when full (>82%) and become prominent when low
-  const needOpacity = (val: number) => (val > 82 ? 'opacity-55 hover:opacity-100' : 'opacity-100');
+  const hasUrgentVitals =
+    needs.health < HUD_TUNING.VITALS_HEALTH_SHOW_THRESHOLD ||
+    needs.hunger < HUD_TUNING.VITALS_NEEDS_SHOW_THRESHOLD ||
+    needs.thirst < HUD_TUNING.VITALS_NEEDS_SHOW_THRESHOLD ||
+    needs.stamina < HUD_TUNING.VITALS_STAMINA_SHOW_THRESHOLD ||
+    needs.sickness > 0 ||
+    tempStage.stage !== 'Normal' ||
+    oxygen < 99.5 ||
+    damageFlash;
+
+  // Brighten vitals whenever health/needs/temp change or dip below threshold, then fade gently after idle delay
+  useEffect(() => {
+    const prev = prevVitalsRef.current;
+    const changed =
+      Math.abs(needs.health - prev.health) >= 0.4 ||
+      Math.abs(needs.hunger - prev.hunger) >= 0.4 ||
+      Math.abs(needs.thirst - prev.thirst) >= 0.4 ||
+      Math.abs(needs.stamina - prev.stamina) >= 0.8 ||
+      Math.abs(needs.temperature - prev.temperature) >= 0.25;
+
+    prevVitalsRef.current = {
+      health: needs.health,
+      hunger: needs.hunger,
+      thirst: needs.thirst,
+      stamina: needs.stamina,
+      temperature: needs.temperature,
+    };
+
+    if (hasUrgentVitals || changed) {
+      setVitalsActive(true);
+      if (vitalsTimerRef.current) window.clearTimeout(vitalsTimerRef.current);
+      if (!hasUrgentVitals) {
+        vitalsTimerRef.current = window.setTimeout(() => {
+          setVitalsActive(false);
+        }, HUD_TUNING.VITALS_FADE_DELAY_SEC * 1000);
+      }
+    }
+  }, [
+    needs.health,
+    needs.hunger,
+    needs.thirst,
+    needs.stamina,
+    needs.temperature,
+    hasUrgentVitals,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      if (vitalsTimerRef.current) window.clearTimeout(vitalsTimerRef.current);
+      if (compassTimerRef.current) window.clearTimeout(compassTimerRef.current);
+      if (areaTimerRef.current) window.clearTimeout(areaTimerRef.current);
+    };
+  }, []);
+
+  // Brighten compass while rotating or moving; fade smoothly after heading settles
+  useEffect(() => {
+    const yawDelta = Math.abs(playerYaw - prevYawRef.current);
+    prevYawRef.current = playerYaw;
+    if (yawDelta > 0.015 || playerContext.isMoving || bossActive) {
+      setCompassActive(true);
+      if (compassTimerRef.current) window.clearTimeout(compassTimerRef.current);
+      if (!bossActive) {
+        compassTimerRef.current = window.setTimeout(() => {
+          setCompassActive(false);
+        }, HUD_TUNING.COMPASS_FADE_DELAY_SEC * 1000);
+      }
+    }
+  }, [playerYaw, playerContext.isMoving, bossActive]);
+
+  // Transient fading banner when entering a new island region
+  useEffect(() => {
+    if (prevZoneIdRef.current !== currentZone.id) {
+      prevZoneIdRef.current = currentZone.id;
+      setAreaBanner({ name: currentZone.name, id: currentZone.id });
+      if (areaTimerRef.current) window.clearTimeout(areaTimerRef.current);
+      areaTimerRef.current = window.setTimeout(() => {
+        setAreaBanner(null);
+      }, HUD_TUNING.AREA_BANNER_DURATION_SEC * 1000);
+    }
+  }, [currentZone.id, currentZone.name]);
+
+  // Auto-dismiss tip pill cleanly after TIP_AUTO_HIDE_SEC
+  useEffect(() => {
+    if (!tutorialHint || !onDismissTutorialHint) return;
+    const tid = window.setTimeout(() => {
+      onDismissTutorialHint();
+    }, HUD_TUNING.TIP_AUTO_HIDE_SEC * 1000);
+    return () => window.clearTimeout(tid);
+  }, [tutorialHint, onDismissTutorialHint]);
+
+  const activeStance = playerContext.isSwimming
+    ? 'swim'
+    : playerContext.stance && playerContext.stance !== 'stand'
+      ? playerContext.stance
+      : null;
 
   return (
     <div className="pointer-events-none fixed inset-0 z-10 select-none overflow-hidden font-sans text-stone-100">
@@ -226,282 +325,143 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
         </div>
       )}
 
-      {/* Top Bar: Environment & Clock (Left) + Compass (Center) + Current Objective & Utility Buttons (Right) */}
+      {/* Top Bar: Discreet F3 Perf Only (Left) + Auto-Fading Compass & Area Banner (Center) + 1-Line Objective (Right) */}
       {!photoMode && (
       <div className="flex items-start justify-between gap-2.5 p-2.5 sm:p-3">
-        {/* Top-Left Wilderness Watch & Thermometer */}
-        <div className="pointer-events-auto flex flex-col gap-1 rounded-lg border border-white/15 bg-stone-950/60 px-2.5 py-1.5 shadow-sm">
-          <div className="flex items-center gap-2 text-xs font-medium tracking-wider text-stone-100">
-            <span className="flex items-center gap-1 whitespace-nowrap text-amber-300">
-              {clockInfo.isNight ? <Moon className="h-3.5 w-3.5 text-sky-300" /> : <Sun className="h-3.5 w-3.5" />}
-              DAY {clock.day}
-            </span>
-            <span className="text-stone-500">/</span>
-            <span className="font-mono text-[11px] text-stone-100">{clockInfo.timeText}</span>
-            <span className="rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[10px] font-normal tracking-wide text-stone-300">
-              {clockInfo.phaseLabel}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 text-[11px] font-light tracking-wide text-stone-300">
-            <span className="flex items-center gap-1">
-              {weather.kind === 'storm' ? (
-                <CloudLightning className="h-3 w-3 text-amber-300" />
-              ) : weather.kind === 'rain' ? (
-                <CloudRain className="h-3 w-3 text-sky-300" />
-              ) : (
-                <Compass className="h-3 w-3 text-emerald-400" />
-              )}
-              <span className="capitalize">{weather.kind}</span>
-            </span>
-            <span className="text-stone-600">|</span>
-            <span>{ambientC.toFixed(0)}°C</span>
-            <span className="text-stone-600">|</span>
-            <span
-              className={
-                isHypothermic
-                  ? 'font-medium text-sky-300'
-                  : isCold
-                    ? 'text-sky-200'
-                    : 'text-stone-300'
-              }
-            >
-              Core {needs.temperature.toFixed(1)}°C {tempTrendArrow && <span className="text-amber-300">{tempTrendArrow}</span>}
-            </span>
-          </div>
-
-          {/* Active location & status pills */}
-          <div className="flex flex-wrap items-center gap-1.5 text-[10px] tracking-wide text-stone-400">
-            <span className="font-medium text-emerald-300/90">{currentZone.name}</span>
-            {showDebug && typeof fps === 'number' && (
-              <span className="rounded border border-white/10 bg-stone-900/70 px-1.5 py-0.5 font-mono text-[10px] text-amber-300">
-                {fps} FPS
-              </span>
-            )}
-          </div>
-
-          {(playerContext.nearFire ||
-            playerContext.sheltered ||
-            nearbyStations?.has('workbench') ||
-            nearbyStations?.has('forge') ||
-            needs.wetness > 15 ||
-            needs.sickness > 0) && (
-            <div className="flex flex-wrap items-center gap-1 pt-0.5">
-              {playerContext.sheltered && (
-                <span className="inline-flex items-center gap-1 rounded border border-emerald-500/35 bg-emerald-950/60 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
-                  <Home className="h-2.5 w-2.5 text-emerald-400" /> Sheltered
-                </span>
-              )}
-              {nearbyStations?.has('workbench') && (
-                <span className="inline-flex items-center gap-1 rounded border border-emerald-500/30 bg-stone-950/70 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
-                  <Hammer className="h-2.5 w-2.5 text-emerald-400" /> Bench
-                </span>
-              )}
-              {nearbyStations?.has('forge') && (
-                <span className="inline-flex items-center gap-1 rounded border border-orange-500/35 bg-orange-950/60 px-1.5 py-0.5 text-[10px] font-medium text-orange-300">
-                  ⚒️ Forge
-                </span>
-              )}
-              {playerContext.nearFire && (
-                <span className="inline-flex items-center gap-1 rounded border border-amber-500/35 bg-amber-950/60 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
-                  <Flame className="h-2.5 w-2.5 text-amber-400" /> Warm
-                </span>
-              )}
-              {needs.wetness > 15 && (
-                <span className="inline-flex items-center gap-1 rounded border border-sky-500/35 bg-sky-950/60 px-1.5 py-0.5 text-[10px] font-medium text-sky-300">
-                  <Droplets className="h-2.5 w-2.5" /> {Math.round(needs.wetness)}%
-                </span>
-              )}
-              {needs.sickness > 0 && (
-                <span className="inline-flex items-center gap-1 rounded border border-lime-500/35 bg-lime-950/60 px-1.5 py-0.5 text-[10px] font-medium text-lime-300">
-                  <AlertTriangle className="h-2.5 w-2.5" /> Sick: {needs.sicknessCause ?? 'Raw Meat'} ({Math.ceil(needs.sickness)}s)
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Phase 5.6: F3 Performance Overlay */}
+        {/* Top-Left: Only shown when [F3] Performance Monitor is explicitly toggled */}
+        <div className="min-w-[140px]">
           {showPerfOverlay && perfMetrics && (
-            <div className="mt-1 rounded-md border border-cyan-500/40 bg-stone-950/85 px-2.5 py-1.5 font-mono text-[10px] leading-relaxed text-cyan-200 shadow-lg">
+            <div className="pointer-events-auto rounded-md border border-cyan-500/40 bg-stone-950/85 px-2.5 py-1.5 font-mono text-[10px] leading-relaxed text-cyan-200 shadow-lg">
               <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-0.5 font-semibold text-cyan-300">
-                <span>PERF MONITOR [F3]</span>
-                <span>{perfMetrics.fps} FPS ({perfMetrics.frameTimeMs.toFixed(1)} ms)</span>
+                <span>PERF [F3]</span>
+                <span>{perfMetrics.fps} FPS ({perfMetrics.frameTimeMs.toFixed(1)}ms)</span>
               </div>
               <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[9.5px] text-stone-300">
-                <span>Draw Calls: <b className="text-stone-100">{perfMetrics.drawCalls}</b></span>
-                <span>Triangles: <b className="text-stone-100">{perfMetrics.triangles.toLocaleString()}</b></span>
-                <span>Textures: <b className="text-stone-100">{perfMetrics.textures}</b></span>
-                <span>Memory: <b className="text-stone-100">{perfMetrics.memoryMB} MB</b></span>
-                <span>Render Scale: <b className="text-stone-100">{perfMetrics.renderScale}%</b></span>
-                <span>FPS Cap: <b className="text-stone-100">{perfMetrics.fpsLimit === 0 ? 'Uncapped' : perfMetrics.fpsLimit}</b></span>
+                <span>Calls: <b className="text-stone-100">{perfMetrics.drawCalls}</b></span>
+                <span>Tris: <b className="text-stone-100">{perfMetrics.triangles.toLocaleString()}</b></span>
+                <span>Scale: <b className="text-stone-100">{perfMetrics.renderScale}%</b></span>
+                <span>Cap: <b className="text-stone-100">{perfMetrics.fpsLimit === 0 ? 'Max' : perfMetrics.fpsLimit}</b></span>
               </div>
             </div>
           )}
         </div>
 
-        {/* Top-Center Sleek Landmark Compass Ribbon */}
-        <div className="pointer-events-none hidden flex-col items-center sm:flex">
-          <div className="relative h-8 w-72 sm:w-80 overflow-hidden rounded-full border border-white/15 bg-stone-950/65 shadow-sm backdrop-blur-xs">
-            <div className="absolute left-1/2 top-0 h-1.5 w-0.5 -translate-x-1/2 bg-amber-400" />
-            {(
-              [
-                { label: 'N', ang: 0, color: 'text-amber-300 font-bold' },
-                { label: 'NE', ang: Math.PI * 0.25, color: 'text-stone-400' },
-                { label: 'E', ang: Math.PI * 0.5, color: 'text-stone-200 font-semibold' },
-                { label: 'SE', ang: Math.PI * 0.75, color: 'text-stone-400' },
-                { label: 'S', ang: Math.PI, color: 'text-stone-200 font-semibold' },
-                { label: 'SW', ang: -Math.PI * 0.75, color: 'text-stone-400' },
-                { label: 'W', ang: -Math.PI * 0.5, color: 'text-stone-200 font-semibold' },
-                { label: 'NW', ang: -Math.PI * 0.25, color: 'text-stone-400' },
-              ] as const
-            ).map((card) => {
-              let rel = card.ang + playerYaw;
-              while (rel > Math.PI) rel -= Math.PI * 2;
-              while (rel < -Math.PI) rel += Math.PI * 2;
-              if (Math.abs(rel) > 1.25) return null;
-              const leftPct = 50 + (rel / 1.2) * 50;
-              return (
-                <span
-                  key={card.label}
-                  className={`absolute top-1 -translate-x-1/2 font-mono text-[10px] ${card.color}`}
-                  style={{ left: `${leftPct}%` }}
-                >
-                  {card.label}
-                </span>
-              );
-            })}
-            {(() => {
-              const items = [
-                { label: 'Wreck', x: WORLD.WRECK_POS.x, z: WORLD.WRECK_POS.z, cls: 'bg-sky-300 text-sky-200' },
-                { label: 'Spring', x: WORLD.SPRING_POS.x, z: WORLD.SPRING_POS.z, cls: 'bg-cyan-400 text-cyan-200' },
-                { label: 'Camp', x: WORLD.ABANDONED_CAMP_POS.x, z: WORLD.ABANDONED_CAMP_POS.z, cls: 'bg-amber-400 text-amber-200' },
-                { label: 'Cave', x: WORLD.CAVE_GROTTO_POS.x, z: WORLD.CAVE_GROTTO_POS.z, cls: 'bg-purple-400 text-purple-200' },
-                { label: 'Ruins', x: WORLD.ANCIENT_RUINS_POS.x, z: WORLD.ANCIENT_RUINS_POS.z, cls: 'bg-emerald-400 text-emerald-200' },
-                { label: 'Station', x: WORLD.RESEARCH_STATION_POS.x, z: WORLD.RESEARCH_STATION_POS.z, cls: 'bg-rose-400 text-rose-200' },
-                { label: 'Dock', x: WORLD.BOAT_DOCK_POS.x, z: WORLD.BOAT_DOCK_POS.z, cls: 'bg-teal-400 text-teal-200' },
-              ]
-                .map((lm) => {
-                  const dx = lm.x - state.player.x;
-                  const dz = lm.z - state.player.z;
-                  const distSq = dx * dx + dz * dz;
-                  let rel = Math.atan2(dx, -dz) + playerYaw;
-                  while (rel > Math.PI) rel -= Math.PI * 2;
-                  while (rel < -Math.PI) rel += Math.PI * 2;
-                  return { ...lm, distSq, rel, leftPct: 50 + (rel / 1.2) * 50 };
-                })
-                .filter((lm) => lm.distSq >= 16 && Math.abs(lm.rel) <= 1.12)
-                .sort((a, b) => a.distSq - b.distSq);
-              const occupiedPcts: number[] = [];
-              return items.map((lm) => {
-                const showText = occupiedPcts.every((p) => Math.abs(p - lm.leftPct) >= 16);
-                if (showText) occupiedPcts.push(lm.leftPct);
+        {/* Top-Center: Auto-Fading Sleek Landmark Compass + Transient Area Banner */}
+        <div className="pointer-events-none flex flex-col items-center">
+          <div
+            className={`hidden flex-col items-center transition-opacity duration-700 sm:flex ${
+              compassActive ? 'opacity-90' : 'opacity-15'
+            }`}
+          >
+            <div className="relative h-7 w-72 sm:w-80 overflow-hidden rounded-full border border-white/15 bg-stone-950/55 shadow-sm backdrop-blur-xs">
+              <div className="absolute left-1/2 top-0 h-1.5 w-0.5 -translate-x-1/2 bg-amber-400" />
+              {(
+                [
+                  { label: 'N', ang: 0, color: 'text-amber-300 font-bold' },
+                  { label: 'NE', ang: Math.PI * 0.25, color: 'text-stone-400' },
+                  { label: 'E', ang: Math.PI * 0.5, color: 'text-stone-200 font-semibold' },
+                  { label: 'SE', ang: Math.PI * 0.75, color: 'text-stone-400' },
+                  { label: 'S', ang: Math.PI, color: 'text-stone-200 font-semibold' },
+                  { label: 'SW', ang: -Math.PI * 0.75, color: 'text-stone-400' },
+                  { label: 'W', ang: -Math.PI * 0.5, color: 'text-stone-200 font-semibold' },
+                  { label: 'NW', ang: -Math.PI * 0.25, color: 'text-stone-400' },
+                ] as const
+              ).map((card) => {
+                let rel = card.ang + playerYaw;
+                while (rel > Math.PI) rel -= Math.PI * 2;
+                while (rel < -Math.PI) rel += Math.PI * 2;
+                if (Math.abs(rel) > 1.25) return null;
+                const leftPct = 50 + (rel / 1.2) * 50;
                 return (
                   <span
-                    key={lm.label}
-                    className="absolute bottom-1 flex -translate-x-1/2 items-center gap-0.5 text-[8.5px] font-medium"
-                    style={{ left: `${lm.leftPct}%` }}
+                    key={card.label}
+                    className={`absolute top-1 -translate-x-1/2 font-mono text-[9.5px] ${card.color}`}
+                    style={{ left: `${leftPct}%` }}
                   >
-                    <span className={`h-1.5 w-1.5 rounded-full ${lm.cls.split(' ')[0]}`} />
-                    {showText && <span className={lm.cls.split(' ')[1]}>{lm.label}</span>}
+                    {card.label}
                   </span>
                 );
-              });
-            })()}
+              })}
+              {(() => {
+                const items = [
+                  { label: 'Wreck', x: WORLD.WRECK_POS.x, z: WORLD.WRECK_POS.z, cls: 'bg-sky-300 text-sky-200' },
+                  { label: 'Spring', x: WORLD.SPRING_POS.x, z: WORLD.SPRING_POS.z, cls: 'bg-cyan-400 text-cyan-200' },
+                  { label: 'Camp', x: WORLD.ABANDONED_CAMP_POS.x, z: WORLD.ABANDONED_CAMP_POS.z, cls: 'bg-amber-400 text-amber-200' },
+                  { label: 'Cave', x: WORLD.CAVE_GROTTO_POS.x, z: WORLD.CAVE_GROTTO_POS.z, cls: 'bg-purple-400 text-purple-200' },
+                  { label: 'Ruins', x: WORLD.ANCIENT_RUINS_POS.x, z: WORLD.ANCIENT_RUINS_POS.z, cls: 'bg-emerald-400 text-emerald-200' },
+                  { label: 'Station', x: WORLD.RESEARCH_STATION_POS.x, z: WORLD.RESEARCH_STATION_POS.z, cls: 'bg-rose-400 text-rose-200' },
+                  { label: 'Dock', x: WORLD.BOAT_DOCK_POS.x, z: WORLD.BOAT_DOCK_POS.z, cls: 'bg-teal-400 text-teal-200' },
+                ]
+                  .map((lm) => {
+                    const dx = lm.x - state.player.x;
+                    const dz = lm.z - state.player.z;
+                    const distSq = dx * dx + dz * dz;
+                    let rel = Math.atan2(dx, -dz) + playerYaw;
+                    while (rel > Math.PI) rel -= Math.PI * 2;
+                    while (rel < -Math.PI) rel += Math.PI * 2;
+                    return { ...lm, distSq, rel, leftPct: 50 + (rel / 1.2) * 50 };
+                  })
+                  .filter((lm) => lm.distSq >= 16 && Math.abs(lm.rel) <= 1.12)
+                  .sort((a, b) => a.distSq - b.distSq);
+                const occupiedPcts: number[] = [];
+                return items.map((lm) => {
+                  const showText = occupiedPcts.every((p) => Math.abs(p - lm.leftPct) >= 16);
+                  if (showText) occupiedPcts.push(lm.leftPct);
+                  return (
+                    <span
+                      key={lm.label}
+                      className="absolute bottom-0.5 flex -translate-x-1/2 items-center gap-0.5 text-[8px] font-medium"
+                      style={{ left: `${lm.leftPct}%` }}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${lm.cls.split(' ')[0]}`} />
+                      {showText && <span className={lm.cls.split(' ')[1]}>{lm.label}</span>}
+                    </span>
+                  );
+                });
+              })()}
+            </div>
           </div>
+
+          {areaBanner && (
+            <div
+              key={areaBanner.id}
+              data-testid="area-entry-banner"
+              className="mt-2.5 flex flex-col items-center text-center drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]"
+            >
+              <span className="text-[9.5px] font-semibold uppercase tracking-[0.28em] text-amber-300/85">
+                {actLabel}
+              </span>
+              <span className="mt-0.5 text-sm font-semibold uppercase tracking-[0.2em] text-stone-100">
+                {areaBanner.name}
+              </span>
+              <span className="mt-1 h-px w-20 bg-gradient-to-r from-transparent via-amber-400/60 to-transparent" />
+            </div>
+          )}
         </div>
 
-        {/* Top-Right Objective Tracker & Quick Buttons */}
+        {/* Top-Right: Single-Line Concise Objective & Active Build/Save Pill */}
         <div className="flex flex-col items-end gap-1.5">
-          <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1">
-            <button
-              type="button"
-              onClick={onOpenJournal}
-              aria-label="Open Journal and Objectives"
-              className="flex items-center gap-1 rounded-md border border-white/10 bg-stone-950/45 px-2 py-1 text-[11px] font-medium tracking-wide text-stone-200 transition hover:border-amber-400/50 hover:text-amber-200"
+          {!bossActive && (
+            <div
+              data-testid="hud-objective"
+              className="flex max-w-xs items-center gap-2 rounded-lg border border-white/10 bg-stone-950/45 px-2.5 py-1.5 text-right shadow-sm backdrop-blur-xs"
             >
-              <BookOpen className="h-3.5 w-3.5 text-amber-400" />
-              <span>Journal [J]</span>
-            </button>
-            <button
-              type="button"
-              onClick={onOpenMap}
-              aria-label="Open Island Map"
-              className="flex items-center gap-1 rounded-md border border-white/10 bg-stone-950/45 px-2 py-1 text-[11px] font-medium tracking-wide text-stone-200 transition hover:border-amber-400/50 hover:text-amber-200"
-            >
-              <MapIcon className="h-3.5 w-3.5 text-emerald-400" />
-              <span>Map [M]</span>
-            </button>
-            <button
-              type="button"
-              onClick={onOpenBuild}
-              aria-label="Open Base Building Menu"
-              className="flex items-center gap-1 rounded-md border border-white/10 bg-stone-950/45 px-2 py-1 text-[11px] font-medium tracking-wide text-stone-200 transition hover:border-emerald-400/50 hover:text-emerald-200"
-            >
-              <Hammer className="h-3.5 w-3.5 text-emerald-400" />
-              <span>Build [B]</span>
-            </button>
-            <button
-              type="button"
-              onClick={onOpenInventory}
-              aria-label="Open Inventory and Crafting"
-              className="flex items-center gap-1 rounded-md border border-white/10 bg-stone-950/45 px-2 py-1 text-[11px] font-medium tracking-wide text-stone-200 transition hover:border-amber-400/50 hover:text-amber-200"
-            >
-              <Backpack className="h-3.5 w-3.5 text-amber-400" />
-              <span>Craft [Tab]</span>
-            </button>
-            {onTogglePhotoMode && (
-              <button
-                type="button"
-                onClick={onTogglePhotoMode}
-                aria-label="Toggle Photo Mode"
-                title="Photo Mode [P]"
-                className="rounded-md border border-white/10 bg-stone-950/45 p-1.5 text-stone-300 transition hover:border-amber-400/50 hover:text-amber-200"
-              >
-                <Camera className="h-3.5 w-3.5" />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onToggleMute}
-              aria-label={isMuted ? 'Unmute Audio' : 'Mute Audio'}
-              className="rounded-md border border-white/10 bg-stone-950/45 p-1.5 text-stone-300 transition hover:border-white/25"
-            >
-              {isMuted ? <VolumeX className="h-3.5 w-3.5 text-red-400" /> : <Volume2 className="h-3.5 w-3.5" />}
-            </button>
-            <button
-              type="button"
-              onClick={onTogglePause}
-              aria-label="Pause Game"
-              className="rounded-md border border-white/10 bg-stone-950/45 p-1.5 text-stone-300 transition hover:border-white/25"
-            >
-              <Pause className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          <div className="max-w-[260px] rounded-lg border border-white/15 bg-stone-950/60 px-2.5 py-2 text-right shadow-sm">
-            <div className="flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-amber-300/95">
-              <span>
-                {actLabel} ({completedSteps}/{actSteps.length})
+              <span className="truncate text-xs font-medium text-stone-100">
+                {currentObjective.title}
               </span>
               {currentObjective.progress && (
-                <span className="rounded border border-white/15 bg-white/10 px-1 py-0.5 font-mono text-[9.5px] text-stone-200">
+                <span className="shrink-0 rounded border border-amber-400/30 bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-200">
                   {currentObjective.progress}
                 </span>
               )}
             </div>
-            <div className="mt-0.5 text-xs font-medium text-stone-100">
-              {currentObjective.title}
-            </div>
-            <div className="mt-0.5 text-[10.5px] font-normal leading-snug text-stone-200/90">
-              {currentObjective.detail}
-            </div>
-          </div>
+          )}
 
           {activeBuildType && (
             <div className="pointer-events-auto flex items-center gap-2 rounded-md border border-emerald-600/80 bg-stone-950/90 px-3 py-1.5 text-xs font-medium text-emerald-300 shadow">
               <Hammer className="h-3.5 w-3.5" />
               <span>
-                Placing {STRUCTURE_CATALOG[activeBuildType].name} • [R] Rotate
+                Placing {STRUCTURE_CATALOG[activeBuildType].name} · Rotate
               </span>
               <button
                 type="button"
@@ -523,10 +483,65 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
       </div>
       )}
 
+      {/* Final Boss Health Bar ("LAVANS BALI — THE AURA KING") */}
+      {!photoMode && bossActive && (
+        <div
+          data-testid="boss-health-bar"
+          className="pointer-events-none fixed inset-x-0 top-14 z-20 flex flex-col items-center px-3"
+        >
+          <div className="w-[min(430px,45vw)] rounded-xl border border-purple-500/70 bg-stone-950/88 px-3.5 py-2 shadow-2xl backdrop-blur-sm">
+            <div className="flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+              <div className="flex items-center gap-1.5 font-extrabold tracking-wider text-amber-200">
+                <Swords className="h-3.5 w-3.5 text-purple-400" />
+                <span>{BOSS_TUNING.DISPLAY_NAME}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider">
+                <span className="rounded border border-purple-500/40 bg-purple-950/70 px-1.5 py-0.5 text-purple-200">
+                  {boss.phase === 1
+                    ? 'Phase I · Shore Sanctum'
+                    : boss.phase === 2
+                      ? 'Phase II · Crystal Ward'
+                      : 'Phase III · Eye of the Storm'}
+                </span>
+                <span className="font-mono text-stone-300">
+                  {Math.max(0, Math.round(boss.hp))} / {boss.maxHp}
+                </span>
+              </div>
+            </div>
+            <div className="relative mt-1.5 h-3 w-full overflow-hidden rounded-full border border-purple-900/70 bg-stone-900">
+              <div
+                className={`h-full transition-all duration-150 ${
+                  boss.shielded
+                    ? 'bg-gradient-to-r from-indigo-500 via-purple-400 to-cyan-300'
+                    : combatHud?.bossStaggered || boss.staggeredSec > 0
+                      ? 'bg-gradient-to-r from-amber-500 via-yellow-300 to-amber-400'
+                      : 'bg-gradient-to-r from-rose-700 via-purple-500 to-amber-400'
+                }`}
+                style={{ width: `${Math.max(0, Math.min(100, (boss.hp / Math.max(1, boss.maxHp)) * 100))}%` }}
+              />
+            </div>
+            {(boss.shielded || combatHud?.bossStaggered || boss.staggeredSec > 0) && (
+              <div className="mt-1 flex items-center justify-center gap-2 text-[11px] font-bold tracking-wider">
+                {boss.shielded && (
+                  <span className="inline-flex items-center gap-1 text-cyan-300">
+                    <Shield className="h-3 w-3" /> AURA SHIELD ACTIVE ({crystalsLeft} Crystal{crystalsLeft === 1 ? '' : 's'} Left — Shatter Crystals!)
+                  </span>
+                )}
+                {(combatHud?.bossStaggered || boss.staggeredSec > 0) && (
+                  <span className="animate-pulse text-amber-300">
+                    ⚡ AURA DIMMED — STRIKE NOW! (Weakpoint Exposed)
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Center Reticle & Contextual Interaction Prompt (hidden while steering boat offshore or in Photo Mode) */}
       {!photoMode && (
       <div className="fixed inset-0 flex flex-col items-center justify-center pointer-events-none">
-        {state.voyage.phase === 'docked' && (
+        {(state.voyage.phase === 'docked' || boss.combatPhase === 'phase3_boat') && (
           <>
             <div className="relative flex items-center justify-center">
               {holdInteractProgress > 0.02 && (
@@ -562,6 +577,29 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
                 }`}
               />
             </div>
+
+            {/* Combat Charge / Bow Draw / Block HUD indicator */}
+            {combatHud && (combatHud.heavyChargePct > 0.05 || combatHud.bowDrawPct > 0.05 || combatHud.isBlocking) && (
+              <div className="mt-2.5 flex flex-col items-center gap-1">
+                {combatHud.isBlocking && (
+                  <div className="inline-flex items-center gap-1 rounded border border-cyan-400/70 bg-cyan-950/80 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-cyan-200">
+                    <Shield className="h-3 w-3" /> Blocking (-70% Dmg)
+                  </div>
+                )}
+                {(combatHud.heavyChargePct > 0.05 || combatHud.bowDrawPct > 0.05) && (
+                  <div className="h-1.5 w-24 overflow-hidden rounded-full border border-white/25 bg-stone-950/85">
+                    <div
+                      className={`h-full ${
+                        combatHud.bowDrawPct > 0 ? 'bg-emerald-400' : 'bg-amber-400'
+                      }`}
+                      style={{
+                        width: `${Math.round(Math.max(combatHud.heavyChargePct, combatHud.bowDrawPct) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
             {hoveredTarget && (
               <div className="mt-5 rounded-lg border border-stone-700/85 bg-stone-950/85 px-3.5 py-2 text-center shadow-xl">
@@ -639,136 +677,176 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
       {!photoMode && (
       <div className="fixed inset-x-0 bottom-0 flex flex-col gap-1.5 px-3 pb-3">
         <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-          {/* Bottom-Left Needs Vitals (compact sleek bars) */}
-          <div className="pointer-events-auto flex w-52 flex-col gap-1 rounded-lg border border-white/15 bg-stone-950/60 p-2 shadow-sm">
-            {/* Health */}
-            <div className={`flex items-center gap-1.5 transition-opacity ${needOpacity(needs.health)}`}>
-              <Heart className="h-3 w-3 shrink-0 text-rose-400" />
-              <div className="flex-1">
-                <div className="flex justify-between text-[10px] font-light tracking-wider text-stone-300">
-                  <span>HEALTH</span>
-                  <span className="font-mono">{Math.round(needs.health)}%</span>
-                </div>
-                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full bg-rose-500 transition-all duration-200"
-                    style={{ width: `${Math.max(0, Math.min(100, needs.health))}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Hunger */}
-            <div className={`flex items-center gap-1.5 transition-opacity ${needOpacity(needs.hunger)}`}>
-              <Utensils className="h-3 w-3 shrink-0 text-amber-400" />
-              <div className="flex-1">
-                <div className="flex justify-between text-[10px] font-light tracking-wider text-stone-300">
-                  <span>FOOD</span>
-                  <span className="font-mono">{Math.round(needs.hunger)}%</span>
-                </div>
-                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full bg-amber-400 transition-all duration-200"
-                    style={{ width: `${Math.max(0, Math.min(100, needs.hunger))}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Thirst */}
-            <div className={`flex items-center gap-1.5 transition-opacity ${needOpacity(needs.thirst)}`}>
-              <Droplets className="h-3 w-3 shrink-0 text-sky-400" />
-              <div className="flex-1">
-                <div className="flex justify-between text-[10px] font-light tracking-wider text-stone-300">
-                  <span>WATER</span>
-                  <span className="font-mono">{Math.round(needs.thirst)}%</span>
-                </div>
-                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full bg-sky-400 transition-all duration-200"
-                    style={{ width: `${Math.max(0, Math.min(100, needs.thirst))}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Stamina */}
-            <div className={`flex items-center gap-1.5 transition-opacity ${needOpacity(needs.stamina)}`}>
-              <Zap className="h-3 w-3 shrink-0 text-emerald-400" />
-              <div className="flex-1">
-                <div className="flex justify-between text-[10px] font-light tracking-wider text-stone-300">
-                  <span>STAMINA</span>
-                  <span className="font-mono">{Math.round(needs.stamina)}%</span>
-                </div>
-                <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full bg-emerald-400 transition-all duration-200"
-                    style={{ width: `${Math.max(0, Math.min(100, needs.stamina))}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Temperature */}
-            <div className="flex items-center justify-between border-t border-white/10 pt-1 text-[10px] font-light tracking-wide text-stone-400">
-              <span className="flex items-center gap-1">
-                <Thermometer className="h-3 w-3 text-amber-300" /> TEMP
-              </span>
-              <span
-                className={
-                  isHypothermic
-                    ? 'font-medium text-sky-300'
-                    : isCold
-                      ? 'text-sky-200'
-                      : 'text-stone-200'
-                }
-              >
-                {needs.temperature.toFixed(1)}°C {tempTrendArrow && <span className="text-amber-300">{tempTrendArrow}</span>}{' '}
-                · {tempStage.stage}
-              </span>
-            </div>
-
-            {/* Stance Badge */}
-            <div className="flex items-center justify-between border-t border-white/10 pt-1 text-[10px] font-light tracking-wider text-stone-400">
-              <span>STANCE</span>
-              <span
-                className={`rounded px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-widest ${
-                  playerContext.stance === 'prone'
-                    ? 'bg-emerald-950/80 text-emerald-300'
-                    : playerContext.stance === 'sit'
-                      ? 'bg-amber-950/80 text-amber-300'
-                      : playerContext.stance === 'crouch'
-                        ? 'bg-sky-950/80 text-sky-300'
-                        : playerContext.stance === 'sleep'
-                          ? 'bg-indigo-950/80 text-indigo-300'
-                          : 'bg-white/10 text-stone-200'
+          {/* Bottom-Left Auto-Fading Needs Vitals & Contextual Stance Icon */}
+          <div className="flex flex-col items-start gap-1.5">
+            {activeStance && (
+              <div
+                data-testid="stance-indicator"
+                className={`pointer-events-none inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-widest shadow ${
+                  activeStance === 'swim'
+                    ? 'border-cyan-400/50 bg-cyan-950/75 text-cyan-200'
+                    : activeStance === 'prone'
+                      ? 'border-emerald-500/45 bg-emerald-950/75 text-emerald-200'
+                      : activeStance === 'sit'
+                        ? 'border-amber-500/45 bg-amber-950/75 text-amber-200'
+                        : activeStance === 'crouch'
+                          ? 'border-sky-500/45 bg-sky-950/75 text-sky-200'
+                          : 'border-indigo-500/45 bg-indigo-950/75 text-indigo-200'
                 }`}
               >
-                {playerContext.stance ?? 'stand'}
-                {playerContext.stance === 'sit' ? ' · Rest+' : ''}
-              </span>
-            </div>
+                {activeStance === 'swim' && <Waves className="h-3 w-3" />}
+                <span>
+                  {activeStance === 'swim'
+                    ? 'Swimming'
+                    : activeStance === 'crouch'
+                      ? 'Crouched'
+                      : activeStance === 'prone'
+                        ? 'Prone'
+                        : activeStance === 'sit'
+                          ? 'Sitting · Rest+'
+                          : 'Sleeping'}
+                </span>
+              </div>
+            )}
 
-            {/* Underwater O2 Breath Meter (visible when diving/holding breath) */}
-            {oxygen < 99.5 && (
-              <div className="flex items-center gap-1.5 border-t border-white/10 pt-1">
-                <Wind className="h-3 w-3 shrink-0 text-cyan-300" />
+            <div
+              data-testid="vitals-panel"
+              className={`pointer-events-auto flex w-48 flex-col gap-1 rounded-lg border border-white/10 bg-stone-950/50 p-2 shadow-sm transition-opacity duration-500 hover:opacity-100 ${
+                vitalsActive ? 'opacity-95' : 'opacity-20'
+              }`}
+            >
+              {/* Health */}
+              <div className="flex items-center gap-1.5">
+                <Heart className="h-3 w-3 shrink-0 text-rose-400" />
                 <div className="flex-1">
-                  <div className="flex justify-between text-[10px] font-medium tracking-wider text-cyan-200">
-                    <span>OXYGEN</span>
-                    <span className="font-mono">{Math.round(oxygen)}%</span>
-                  </div>
-                  <div className="mt-0.5 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
                     <div
-                      className={`h-full transition-all duration-150 ${
-                        oxygen < 25 ? 'animate-pulse bg-rose-400' : 'bg-cyan-400'
-                      }`}
-                      style={{ width: `${Math.max(0, Math.min(100, oxygen))}%` }}
+                      className="h-full bg-rose-500 transition-all duration-200"
+                      style={{ width: `${Math.max(0, Math.min(100, needs.health))}%` }}
                     />
                   </div>
                 </div>
+                <span className="w-7 text-right font-mono text-[9.5px] text-stone-300">
+                  {Math.round(needs.health)}
+                </span>
               </div>
-            )}
+
+              {/* Hunger */}
+              <div className="flex items-center gap-1.5">
+                <Utensils className="h-3 w-3 shrink-0 text-amber-400" />
+                <div className="flex-1">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full bg-amber-400 transition-all duration-200"
+                      style={{ width: `${Math.max(0, Math.min(100, needs.hunger))}%` }}
+                    />
+                  </div>
+                </div>
+                <span className="w-7 text-right font-mono text-[9.5px] text-stone-300">
+                  {Math.round(needs.hunger)}
+                </span>
+              </div>
+
+              {/* Thirst */}
+              <div className="flex items-center gap-1.5">
+                <Droplets className="h-3 w-3 shrink-0 text-sky-400" />
+                <div className="flex-1">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full bg-sky-400 transition-all duration-200"
+                      style={{ width: `${Math.max(0, Math.min(100, needs.thirst))}%` }}
+                    />
+                  </div>
+                </div>
+                <span className="w-7 text-right font-mono text-[9.5px] text-stone-300">
+                  {Math.round(needs.thirst)}
+                </span>
+              </div>
+
+              {/* Stamina */}
+              <div className="flex items-center gap-1.5">
+                <Zap className="h-3 w-3 shrink-0 text-emerald-400" />
+                <div className="flex-1">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full bg-emerald-400 transition-all duration-200"
+                      style={{ width: `${Math.max(0, Math.min(100, needs.stamina))}%` }}
+                    />
+                  </div>
+                </div>
+                <span className="w-7 text-right font-mono text-[9.5px] text-stone-300">
+                  {Math.round(needs.stamina)}
+                </span>
+              </div>
+
+              {/* Body Temperature */}
+              <div className="flex items-center justify-between border-t border-white/10 pt-1 text-[10px] font-light tracking-wide text-stone-300">
+                <span className="flex items-center gap-1">
+                  <Thermometer className="h-3 w-3 text-amber-300" />
+                  <span className={isHypothermic ? 'font-medium text-sky-300' : isCold ? 'text-sky-200' : 'text-stone-200'}>
+                    {needs.temperature.toFixed(1)}°C {tempTrendArrow && <span className="text-amber-300">{tempTrendArrow}</span>}
+                  </span>
+                </span>
+                {tempStage.stage !== 'Normal' && (
+                  <span className="text-[9.5px] text-sky-200">{tempStage.stage}</span>
+                )}
+              </div>
+
+              {/* Transient status pills only when active */}
+              {(playerContext.sheltered ||
+                playerContext.nearFire ||
+                nearbyStations?.has('workbench') ||
+                nearbyStations?.has('forge') ||
+                needs.sickness > 0) && (
+                <div className="flex flex-wrap items-center gap-1 pt-0.5">
+                  {playerContext.sheltered && (
+                    <span className="inline-flex items-center gap-0.5 rounded bg-emerald-950/70 px-1.5 py-0.5 text-[9px] text-emerald-300">
+                      <Home className="h-2.5 w-2.5" /> Shelter
+                    </span>
+                  )}
+                  {playerContext.nearFire && (
+                    <span className="inline-flex items-center gap-0.5 rounded bg-amber-950/70 px-1.5 py-0.5 text-[9px] text-amber-300">
+                      <Flame className="h-2.5 w-2.5" /> Warm
+                    </span>
+                  )}
+                  {nearbyStations?.has('workbench') && (
+                    <span className="inline-flex items-center gap-0.5 rounded bg-stone-900/80 px-1.5 py-0.5 text-[9px] text-emerald-300">
+                      <Hammer className="h-2.5 w-2.5" /> Bench
+                    </span>
+                  )}
+                  {nearbyStations?.has('forge') && (
+                    <span className="inline-flex items-center gap-0.5 rounded bg-orange-950/70 px-1.5 py-0.5 text-[9px] text-orange-300">
+                      Forge
+                    </span>
+                  )}
+                  {needs.sickness > 0 && (
+                    <span className="inline-flex items-center gap-0.5 rounded bg-lime-950/70 px-1.5 py-0.5 text-[9px] text-lime-300">
+                      <AlertTriangle className="h-2.5 w-2.5" /> Sick ({Math.ceil(needs.sickness)}s)
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Underwater O2 Breath Meter */}
+              {oxygen < 99.5 && (
+                <div className="flex items-center gap-1.5 border-t border-white/10 pt-1">
+                  <Wind className="h-3 w-3 shrink-0 text-cyan-300" />
+                  <div className="flex-1">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className={`h-full transition-all duration-150 ${
+                          oxygen < 25 ? 'animate-pulse bg-rose-400' : 'bg-cyan-400'
+                        }`}
+                        style={{ width: `${Math.max(0, Math.min(100, oxygen))}%` }}
+                      />
+                    </div>
+                  </div>
+                  <span className="w-7 text-right font-mono text-[9.5px] text-cyan-200">
+                    {Math.round(oxygen)}%
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Bottom-Center 6-Slot Quick Hotbar + Item Pickup Pop-ups */}
@@ -796,7 +874,7 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
                     onClick={onUseSelected}
                     className="rounded bg-amber-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-stone-950 hover:bg-amber-400"
                   >
-                    Consume [F]
+                    Consume [G]
                   </button>
                 )}
               </div>
@@ -923,26 +1001,40 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
                   Sail+
                 </button>
               )}
+              {onDebugStartBossFight && (
+                <button
+                  type="button"
+                  data-testid="debug-boss-btn"
+                  onClick={onDebugStartBossFight}
+                  className="w-full rounded bg-gradient-to-r from-purple-700 to-amber-600 px-1.5 py-1 text-[10.5px] font-bold text-white hover:from-purple-600 hover:to-amber-500"
+                >
+                  ⚔️ Boss Fight [F8]
+                </button>
+              )}
             </div>
           )}
         </div>
         </div>
 
-        {/* Contextual First-Time Hint + Closed Captions Stack */}
+        {/* Dramatic Boss Subtitles */}
+        {bossActive && activeSubtitle && (
+          <div className="flex justify-center">
+            <div className="rounded-lg border border-purple-500/50 bg-stone-950/90 px-4 py-1.5 text-center text-xs font-semibold tracking-wide text-amber-100 shadow-xl">
+              {activeSubtitle}
+            </div>
+          </div>
+        )}
+
+        {/* Concise 1-line fading tip & closed captions */}
         {tutorialHint && (
           <div className="flex justify-center">
-            <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-amber-500/40 bg-stone-950/85 px-3 py-1.5 text-[11px] text-amber-100 shadow-lg">
-              <span>{tutorialHint.text}</span>
-              {onDismissTutorialHint && (
-                <button
-                  type="button"
-                  onClick={onDismissTutorialHint}
-                  className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300 hover:bg-amber-500/35"
-                >
-                  Got it
-                </button>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={() => onDismissTutorialHint?.()}
+              className="pointer-events-auto max-w-md truncate rounded-full border border-amber-500/35 bg-stone-950/75 px-3.5 py-1 text-[11px] text-amber-100/95 shadow transition hover:border-amber-400/60"
+            >
+              {tutorialHint.text}
+            </button>
           </div>
         )}
 
@@ -958,29 +1050,6 @@ export const SurvivalHUD: React.FC<SurvivalHUDProps> = ({
             ))}
           </div>
         )}
-
-        {/* Controls Hint Bar (always fits completely on screen, toggles with [H], auto-hides cleanly) */}
-        <div className="flex justify-center">
-          {showControlsHint ? (
-            <button
-              type="button"
-              onClick={onToggleControlsHint}
-              title="Click or press [H] to hide controls hints"
-              className="pointer-events-auto max-w-[95vw] rounded-md border border-white/10 bg-stone-950/45 px-2.5 py-1 text-center text-[10.5px] font-light tracking-wide text-stone-300 transition hover:border-white/25 hover:text-stone-100"
-            >
-              [WASD] Move · [Space] Jump · [Shift] Sprint · [C] Crouch (Hold Prone) · [Z] Prone · [X] Sit · [E/Click] Interact · [F/T] Inspect · [P] Photo · [B] Build · [Tab/I] Craft · [J] Journal · [M] Map · [H] Hide Hints
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onToggleControlsHint}
-              title="Press [H] to show controls"
-              className="pointer-events-auto rounded-md border border-white/10 bg-stone-950/35 px-2 py-0.5 text-[10px] font-light tracking-wider text-stone-400 transition hover:border-white/25 hover:text-stone-200"
-            >
-              [H] Controls
-            </button>
-          )}
-        </div>
       </div>
       )}
     </div>
