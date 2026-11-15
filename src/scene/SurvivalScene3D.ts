@@ -29,12 +29,15 @@ import {
   NEEDS,
   PART5_IMMERSION_TUNING,
   PERFORMANCE_TUNING,
+  POWER_TUNING,
+  PRISON_TUNING,
   SAVE,
   STANCE_TUNING,
   TEMPERATURE,
   WORLD,
   WORLD_VISUAL_TUNING,
 } from '../survival/config.ts';
+import { getDodgeIframeBonusMult, getDodgeSpeedBonusMult } from '../survival/powers.ts';
 import { computeAmbientTempC, getBodyTempStage } from '../survival/needs.ts';
 import {
   GATHER_NODE_META,
@@ -53,6 +56,7 @@ import {
   PlacedStructure,
   PlayerContext,
   PlayerStance,
+  PowerId,
   StationRepairId,
   StoryClueDef,
   StructureType,
@@ -61,6 +65,8 @@ import {
   WeatherState,
   WildlifeEntity,
 } from '../survival/types.ts';
+import { DanielCompanion3D } from './DanielCompanion3D.ts';
+import { StoryWorldProps3D } from './StoryWorldProps3D.ts';
 import {
   getStructureInteractionPrompt,
   isValidPlacementHeight,
@@ -175,7 +181,14 @@ export interface HoveredTargetInfo {
     | 'boss'
     | 'boss_crystal'
     | 'boss_barrel'
-    | 'boss_shade';
+    | 'boss_shade'
+    | 'daniel'
+    | 'shrine'
+    | 'armory_item'
+    | 'prison_gate'
+    | 'prison_vent'
+    | 'evidence_locker'
+    | 'stronghold_guard';
   label: string;
   prompt: string;
   subtext?: string;
@@ -193,6 +206,9 @@ export interface HoveredTargetInfo {
   bossCrystalIdx?: number;
   bossBarrelIdx?: number;
   bossShadeIdx?: number;
+  powerId?: PowerId;
+  armoryTarget?: 'aura_rifle' | 'harpoon_gun' | 'aura_shard';
+  guardId?: string;
 }
 
 export interface SceneBossCallbacks {
@@ -202,7 +218,10 @@ export interface SceneBossCallbacks {
   onBossDamagePlayer?: (dmg: number) => void;
   onAdvanceBossPhase?: (nextPhase: BossCombatPhase) => void;
   onBossDefeatCutsceneDone?: () => void;
-  onConsumeCombatAmmo?: (itemId: 'arrow' | 'flare_ammo' | 'fire_bomb') => boolean;
+  onConsumeCombatAmmo?: (
+    itemId: 'arrow' | 'flare_ammo' | 'fire_bomb' | 'rifle_ammo' | 'harpoon_bolt'
+  ) => boolean;
+  onHitStrongholdGuard?: (guardId: string, damage: number) => void;
   onSpendCombatStamina?: (amount: number) => void;
   onCombatStatus?: (msg: string) => void;
 }
@@ -583,8 +602,10 @@ export class SurvivalScene3D {
   private lastThunderSoundAt: number = 0;
   private lastGhostValid: boolean | null = null;
 
-  // Final Boss Encounter ("THE AURA KING") & Combat System
+  // Final Boss Encounter ("THE AURA KING") & Story World Entities
   private boss3D: BossAuraKing3D | null = null;
+  private daniel3D: DanielCompanion3D | null = null;
+  private storyProps3D: StoryWorldProps3D | null = null;
   private bossCallbacks: SceneBossCallbacks = {};
   private lastBossResult: BossUpdateResult | null = null;
   private bossHeatHazeBoost: number = 0;
@@ -820,6 +841,14 @@ export class SurvivalScene3D {
             this.getTerrainHeight(x, z)
           );
           this.scene.add(this.boss3D.root);
+          if (!this.daniel3D) {
+            this.daniel3D = new DanielCompanion3D(this.scene, models);
+          }
+          if (!this.storyProps3D) {
+            this.storyProps3D = new StoryWorldProps3D(this.scene, models, (x, z) =>
+              this.getTerrainHeight(x, z)
+            );
+          }
           this.rebuildDynamicColliders();
         }
 
@@ -1748,6 +1777,47 @@ export class SurvivalScene3D {
     this.boss3D?.resetArenaForRetry();
   }
 
+  public triggerSovereignCleaveWave() {
+    this.storyProps3D?.triggerCleaveWave(this.playerPos);
+    this.bossCameraShakeAmp = Math.max(this.bossCameraShakeAmp, 0.28);
+    this.bossCameraShakeTimer = Math.max(this.bossCameraShakeTimer, 0.22);
+  }
+
+  public getHasActiveFireNearby(): boolean {
+    if (this.latestState) {
+      const equipped = getEquipped(this.latestState.inventory, this.latestState.selectedSlot);
+      const tKind = equipped.def?.tool?.kind;
+      if (tKind === 'torch' || tKind === 'lantern') return true;
+      for (const cf of this.latestState.campfires) {
+        if (Math.hypot(this.playerPos.x - cf.x, this.playerPos.z - cf.z) <= 12) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  public teleportPlayerTo(x: number, z: number, yaw?: number) {
+    const ty = this.getTerrainHeight(x, z);
+    this.playerFootY = ty;
+    this.playerPos.set(x, ty + STANCE_TUNING.EYE_HEIGHT_STAND_M, z);
+    this.velX = 0;
+    this.velZ = 0;
+    this.verticalVel = 0;
+    this.isGrounded = true;
+    this.stance = 'stand';
+    this.isCrouching = false;
+    if (typeof yaw === 'number') {
+      this.yaw = yaw;
+      this.targetYaw = yaw;
+    }
+    this.rebuildDynamicColliders();
+  }
+
+  public getCurrentStance(): PlayerStance {
+    return this.stance;
+  }
+
   public unlockPointer() {
     this.keys = {};
     this.isDragging = false;
@@ -2428,6 +2498,10 @@ export class SurvivalScene3D {
     if (this.boss3D && this.latestState?.boss.combatPhase !== 'phase3_boat') {
       cols.push(...this.boss3D.arenaColliders);
     }
+    if (this.storyProps3D && this.latestState && !this.isOnOceanBoat(this.latestState)) {
+      cols.push(...this.storyProps3D.staticColliders);
+      cols.push(...this.storyProps3D.getDynamicColliders(this.latestState));
+    }
     this.rebuildFootRayTargets();
   }
 
@@ -2456,6 +2530,9 @@ export class SurvivalScene3D {
   public syncState(state: SurvivalState) {
     const prevState = this.latestState;
     this.latestState = state;
+    if (prevState && prevState.prison?.inPrison !== state.prison?.inPrison) {
+      this.rebuildDynamicColliders();
+    }
 
     // Update equipped tool & holdable IK visual
     const equipped = getEquipped(state.inventory, state.selectedSlot);
@@ -4461,6 +4538,96 @@ export class SurvivalScene3D {
       }
     }
 
+    // 1c-2b. Check Daniel Companion & Story Shrines / Armory / Prison / Guards
+    if (this.daniel3D) {
+      const dHit = this.daniel3D.findHoveredDaniel(
+        this.camera.position,
+        _camDir,
+        WORLD.INTERACT_RANGE + 1.8
+      );
+      if (dHit) {
+        const d = this.latestState.companion;
+        this.hoveredTarget = {
+          kind: 'daniel',
+          label: d.downed
+            ? 'Daniel (Downed!)'
+            : d.found
+              ? `Daniel — Trust ${d.trust}/100`
+              : 'Injured Survivor in the Cave',
+          prompt: d.downed
+            ? '[E / Click] Revive Daniel'
+            : d.found
+              ? '[E / Click] Talk / Care for Daniel  •  Hold [G] Command Wheel'
+              : '[E / Click] Check on Injured Survivor',
+          subtext: d.moodText ?? undefined,
+          canInteract: true,
+        };
+        return;
+      }
+    }
+
+    if (this.storyProps3D) {
+      const spHit = this.storyProps3D.findHoveredProp(
+        this.camera.position,
+        _camDir,
+        this.latestState,
+        WORLD.INTERACT_RANGE + 2.0
+      );
+      if (spHit) {
+        if (spHit.kind === 'shrine') {
+          const unlocked = this.latestState.powers.unlocked.includes(spHit.powerId);
+          this.hoveredTarget = {
+            kind: 'shrine',
+            label: POWER_TUNING.SHRINES.find((s) => s.id === spHit.powerId)?.name ?? 'Relic Shrine',
+            prompt: spHit.label,
+            subtext: unlocked
+              ? 'Power already awakened'
+              : POWER_TUNING.SHRINES.find((s) => s.id === spHit.powerId)?.description,
+            canInteract: true,
+            powerId: spHit.powerId,
+          };
+          return;
+        }
+        if (spHit.kind === 'armory_item') {
+          this.hoveredTarget = {
+            kind: 'armory_item',
+            label:
+              spHit.armoryTarget === 'aura_rifle'
+                ? 'Aura-Infused Rifle'
+                : 'Pneumatic Harpoon Gun',
+            prompt: '[E / Click] Steal Weapon from Citadel Armory (Raises Aura Suspicion!)',
+            canInteract: true,
+            armoryTarget: spHit.armoryTarget,
+          };
+          return;
+        }
+        if (spHit.kind === 'prison_gate' || spHit.kind === 'prison_vent' || spHit.kind === 'evidence_locker') {
+          this.hoveredTarget = {
+            kind: spHit.kind,
+            label:
+              spHit.kind === 'prison_gate'
+                ? 'Stronghold Dungeon Cell Gate'
+                : spHit.kind === 'prison_vent'
+                  ? 'Cracked Basalt Escape Vent'
+                  : 'Stronghold Evidence Locker',
+            prompt: spHit.label,
+            canInteract: true,
+          };
+          return;
+        }
+        if (spHit.kind === 'stronghold_guard') {
+          this.hoveredTarget = {
+            kind: 'stronghold_guard',
+            label: 'Stronghold Aura Sentinel',
+            prompt: '[LMB] Strike / Shoot Sentinel  •  [C]/[Z] Sneak past vision cone',
+            canInteract: true,
+            guardId: spHit.guardId,
+          };
+          return;
+        }
+      }
+    }
+
     // 1c-3. Check Southern Boat Slipway & Dockyard (Act 4 Escape Vessel)
     if (this.boatDock) {
       const dockPos = this.boatDock.interactPos;
@@ -4473,16 +4640,17 @@ export class SurvivalScene3D {
         if (_camDir.dot(_toTarget) > 0.45) {
           const stagesDone = countBoatStagesComplete(this.latestState.boat);
           const totalStages = BOAT_STAGE_ORDER.length;
-          const chartReady = Boolean(this.latestState.stationRepairs?.chart);
+          const isRebuilding = this.latestState.storyPhase === 'preparing';
           this.hoveredTarget = {
             kind: 'boat_dock',
-            label: `Escape Boat Slipway (${stagesDone}/${totalStages} Stages)`,
+            label: `${isRebuilding ? 'Escape Boat #2 Slipway' : 'Escape Boat Slipway'} (${stagesDone}/${totalStages} Stages)`,
             prompt: '[E / Click] Open Escape Boat Dockyard',
-            subtext: !chartReady
-              ? 'Repair Sea Chart inside the Research Station to unlock hull blueprints'
-              : stagesDone >= totalStages
-                ? 'Vessel complete — inspect sea rations & cast off toward Port Solis'
-                : 'Construct boat stages & stock sea provisions',
+            subtext:
+              stagesDone >= totalStages
+                ? isRebuilding
+                  ? 'Vessel rebuilt — launch final sea chase when armed & ready'
+                  : 'Boat complete — cast off to attempt the outer reef crossing'
+                : 'Construct boat parts in any order (Daniel Build order speeds construction)',
             canInteract: true,
           };
           return;
@@ -4806,7 +4974,10 @@ export class SurvivalScene3D {
           (this.isActionKey('forward') ? 1 : 0) - (this.isActionKey('back') ? 1 : 0);
         const dodgeBoost =
           this.dodgeTimer > 0
-            ? Math.sign(this.dodgeDirX || strafe || 1) * COMBAT_TUNING.DODGE_SPEED_MPS * 0.72
+            ? Math.sign(this.dodgeDirX || strafe || 1) *
+              COMBAT_TUNING.DODGE_SPEED_MPS *
+              getDodgeSpeedBonusMult(this.latestState!) *
+              0.72
             : 0;
         this.boatDeckOffsetX = THREE.MathUtils.clamp(
           this.boatDeckOffsetX + (strafe * 4.2 + dodgeBoost) * delta,
@@ -4983,15 +5154,17 @@ export class SurvivalScene3D {
     moveSpeed *= tempStage.speedMult;
     moveSpeed *= this.lastEuphoriaOut?.speedMultiplier ?? 1;
 
+    const dodgeMult = this.latestState ? getDodgeSpeedBonusMult(this.latestState) : 1.0;
+    const dodgeSpeed = COMBAT_TUNING.DODGE_SPEED_MPS * dodgeMult;
     const targetVx =
       this.dodgeTimer > 0
-        ? this.dodgeDirX * COMBAT_TUNING.DODGE_SPEED_MPS
+        ? this.dodgeDirX * dodgeSpeed
         : hasInput
           ? _moveDir.x * moveSpeed
           : 0;
     const targetVz =
       this.dodgeTimer > 0
-        ? this.dodgeDirZ * COMBAT_TUNING.DODGE_SPEED_MPS
+        ? this.dodgeDirZ * dodgeSpeed
         : hasInput
           ? _moveDir.z * moveSpeed
           : 0;
@@ -6589,6 +6762,12 @@ export class SurvivalScene3D {
         k === 'boat_dock' ||
         k === 'clue' ||
         k === 'gate' ||
+        k === 'daniel' ||
+        k === 'shrine' ||
+        k === 'armory_item' ||
+        k === 'prison_gate' ||
+        k === 'prison_vent' ||
+        k === 'evidence_locker' ||
         k === 'place_campfire' ||
         k === 'place_shelter' ||
         k === 'place_structure' ||
@@ -6759,6 +6938,48 @@ export class SurvivalScene3D {
       return;
     }
 
+    if (eqId === 'aura_rifle' && this.boss3D) {
+      const ok = this.bossCallbacks.onConsumeCombatAmmo?.('rifle_ammo');
+      if (!ok) {
+        this.bossCallbacks.onCombatStatus?.('Out of Aura Rifle Cells! Craft cells at the Workbench.');
+        return;
+      }
+      this.combatCooldown = 0.28;
+      this.camera.getWorldDirection(_camDir);
+      const origin = this.camera.position.clone().addScaledVector(_camDir, 0.65);
+      this.boss3D.spawnPlayerProjectile(
+        'aura_bolt',
+        origin,
+        _camDir,
+        48,
+        Math.round(COMBAT_TUNING.WEAPON_DAMAGE.aura_rifle * diffMult)
+      );
+      this.triggerToolSwing('aura_rifle');
+      audio.playStoryCue('rifle');
+      return;
+    }
+
+    if (eqId === 'harpoon_gun' && this.boss3D) {
+      const ok = this.bossCallbacks.onConsumeCombatAmmo?.('harpoon_bolt');
+      if (!ok) {
+        this.bossCallbacks.onCombatStatus?.('Out of Harpoon Bolts! Craft bolts or gather scrap iron.');
+        return;
+      }
+      this.combatCooldown = 0.58;
+      this.camera.getWorldDirection(_camDir);
+      const origin = this.camera.position.clone().addScaledVector(_camDir, 0.65);
+      this.boss3D.spawnPlayerProjectile(
+        'harpoon',
+        origin,
+        _camDir,
+        36,
+        Math.round(COMBAT_TUNING.WEAPON_DAMAGE.harpoon_gun * diffMult)
+      );
+      this.triggerToolSwing('harpoon_gun');
+      audio.playStoryCue('harpoon');
+      return;
+    }
+
     if (eqId === 'fire_bomb' && this.boss3D) {
       this.performThrowAttack();
       return;
@@ -6771,7 +6992,8 @@ export class SurvivalScene3D {
       hoverKind !== 'boss' &&
       hoverKind !== 'boss_crystal' &&
       hoverKind !== 'boss_barrel' &&
-      hoverKind !== 'boss_shade'
+      hoverKind !== 'boss_shade' &&
+      hoverKind !== 'stronghold_guard'
     ) {
       return;
     }
@@ -6842,6 +7064,17 @@ export class SurvivalScene3D {
       audio.playHeavyImpact(finalHeavy);
       this.boss3D.damageShade(shade.index, dmg);
       return;
+    }
+
+    if (this.storyProps3D) {
+      const guard = this.storyProps3D.findGuardInRay(this.camera.position, _camDir, meleeReach);
+      if (guard) {
+        this.notifyToolImpact();
+        audio.playHeavyImpact(finalHeavy);
+        this.boss3D.spawnBurstParticles(guard.pos, 14, 0xa855f7, 5.4, 0.95, 0.45);
+        this.bossCallbacks.onHitStrongholdGuard?.(guard.guardId, dmg);
+        return;
+      }
     }
 
     const bossHit = this.boss3D.getBossHitTarget(
@@ -7144,6 +7377,24 @@ export class SurvivalScene3D {
       if (this.voyageDiorama && this.latestState) {
         updateVoyageDiorama(this.voyageDiorama, this.latestState, delta, now);
       }
+      if (this.daniel3D && this.latestState && !this.isUiBlocked) {
+        this.daniel3D.update(
+          delta,
+          now * 0.001,
+          this.latestState,
+          this.playerPos,
+          (x, z) => this.getTerrainHeight(x, z),
+          this.voyageDiorama ? this.voyageDiorama.boatPivot.position.y : 0
+        );
+      }
+      if (this.storyProps3D && this.latestState && !this.isUiBlocked) {
+        this.storyProps3D.update(
+          delta,
+          now * 0.001,
+          this.latestState,
+          (x, z) => this.getTerrainHeight(x, z)
+        );
+      }
       if (this.boss3D && this.latestState && !this.isUiBlocked) {
         const boatPlayerPos = this.isOnOceanBoat(this.latestState)
           ? _sunWorldTmp.set(
@@ -7152,6 +7403,7 @@ export class SurvivalScene3D {
               VOYAGE_STAGE_ORIGIN.z - 2.15 + this.boatDeckOffsetZ
             )
           : this.playerPos;
+        const iframeDuration = COMBAT_TUNING.DODGE_IFRAME_SEC * getDodgeIframeBonusMult(this.latestState);
         const bossRes = this.boss3D.update({
           dt: delta,
           elapsedSec: now * 0.001,
@@ -7162,11 +7414,29 @@ export class SurvivalScene3D {
           isPlayerBlocking: this.isBlocking,
           isPlayerParrying: this.parryWindowTimer > 0,
           isPlayerDodgeIFrame:
-            this.dodgeTimer > COMBAT_TUNING.DODGE_DURATION_SEC - COMBAT_TUNING.DODGE_IFRAME_SEC,
+            this.dodgeTimer > Math.max(0, COMBAT_TUNING.DODGE_DURATION_SEC - iframeDuration),
           isPlayerGrounded: this.isGrounded,
           getTerrainHeight: (x, z) => this.getTerrainHeight(x, z),
           voyageCtrl: this.voyageDiorama,
         });
+        // Check active ranged projectiles against Stronghold Sentinels
+        if (this.storyProps3D && this.latestState.boss.combatPhase === 'inactive') {
+          for (const proj of this.boss3D.getActiveProjectiles()) {
+            if (!proj.active) continue;
+            for (const g of this.latestState.stronghold.guards) {
+              if (g.hp <= 0) continue;
+              const gy = this.getTerrainHeight(g.x, g.z) + 1.05;
+              const d = Math.hypot(proj.pos.x - g.x, proj.pos.y - gy, proj.pos.z - g.z);
+              if (d <= 1.1) {
+                this.boss3D.spawnBurstParticles(proj.pos, 16, 0xc084fc, 5.8, 1.0, 0.45);
+                this.bossCallbacks.onHitStrongholdGuard?.(g.id, proj.damage);
+                proj.active = false;
+                proj.mesh.visible = false;
+                break;
+              }
+            }
+          }
+        }
         this.lastBossResult = bossRes;
         this.bossHeatHazeBoost = bossRes.heatHazeBoost;
         this.bossStormFlash = bossRes.stormLightningFlash;
@@ -7314,6 +7584,10 @@ export class SurvivalScene3D {
     this.skyDome?.material.dispose();
     this.skyDome?.physicalSky.material.dispose();
     this.skyDome?.iblSky.material.dispose();
+    this.daniel3D?.dispose();
+    this.daniel3D = null;
+    this.storyProps3D?.dispose();
+    this.storyProps3D = null;
     this.boss3D?.dispose();
     this.boss3D = null;
     this.planeIntro.dispose();

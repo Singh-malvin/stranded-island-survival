@@ -31,7 +31,7 @@ export type BossClipName =
 
 export interface ActiveProjectile {
   active: boolean;
-  kind: 'arrow' | 'fire_bomb' | 'flare' | 'spear';
+  kind: 'arrow' | 'fire_bomb' | 'flare' | 'spear' | 'aura_bolt' | 'harpoon';
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   life: number;
@@ -584,8 +584,12 @@ export class BossAuraKing3D {
       p.mesh.position.copy(p.pos);
       p.mesh.visible = true;
       p.mesh.traverse((child) => {
-        if (child.name === 'Proj_Arrow') child.visible = kind === 'arrow' || kind === 'spear';
-        if (child.name === 'Proj_Flare') child.visible = kind === 'flare';
+        if (child.name === 'Proj_Arrow') {
+          child.visible = kind === 'arrow' || kind === 'spear' || kind === 'harpoon';
+        }
+        if (child.name === 'Proj_Flare') {
+          child.visible = kind === 'flare' || kind === 'aura_bolt';
+        }
         if (child.name === 'Proj_Bomb') child.visible = kind === 'fire_bomb';
       });
       return;
@@ -870,19 +874,16 @@ export class BossAuraKing3D {
       }
     }
 
-    // Toggle Crystal & Barrel Mesh visibility cleanly inside the Sanctum arena
-    const nearSanctum =
-      Math.hypot(playerPos.x - BOSS_TUNING.ARENA_CENTER_X, playerPos.z - BOSS_TUNING.ARENA_CENTER_Z) <=
-      BOSS_TUNING.ARENA_RADIUS_M * 1.45;
+    // Toggle Crystal & Barrel Mesh visibility only during active shoreline/shield phases
     const showArenaObjects =
+      combatPhase !== 'inactive' &&
       combatPhase !== 'phase3_boat' &&
       combatPhase !== 'defeat_cutscene' &&
-      combatPhase !== 'ended' &&
-      (combatPhase !== 'inactive' || nearSanctum);
+      combatPhase !== 'ended';
     for (let i = 0; i < 3; i++) {
       const m = this.crystalMeshes[i];
       if (!m) continue;
-      const alive = showArenaObjects && (combatPhase === 'inactive' || bossState.crystalsAlive[i]);
+      const alive = showArenaObjects && bossState.crystalsAlive[i];
       m.visible = alive;
       if (alive) {
         const baseY = (m.userData as { baseLocalY?: number }).baseLocalY ?? m.position.y;
@@ -1330,7 +1331,17 @@ export class BossAuraKing3D {
       if (!p.active) continue;
       p.life -= effDt;
       const grav =
-        p.kind === 'fire_bomb' ? 11.2 : p.kind === 'spear' ? 7.2 : p.kind === 'flare' ? 1.4 : 4.6;
+        p.kind === 'fire_bomb'
+          ? 11.2
+          : p.kind === 'spear'
+            ? 7.2
+            : p.kind === 'aura_bolt'
+              ? 0.55
+              : p.kind === 'harpoon'
+                ? 2.2
+                : p.kind === 'flare'
+                  ? 1.4
+                  : 4.6;
       p.vel.y -= grav * effDt;
       p.pos.addScaledVector(p.vel, effDt);
       p.mesh.position.copy(p.pos);
@@ -1343,8 +1354,15 @@ export class BossAuraKing3D {
         p.mesh.rotation.z += effDt * 6.0;
       }
 
-      if ((p.kind === 'flare' || p.kind === 'fire_bomb') && Math.random() < 0.45) {
-        this.spawnBurstParticles(p.pos, 1, p.kind === 'flare' ? 0xfb7185 : 0xf97316, 1.8, 0.75, 0.25);
+      if ((p.kind === 'flare' || p.kind === 'fire_bomb' || p.kind === 'aura_bolt') && Math.random() < 0.45) {
+        this.spawnBurstParticles(
+          p.pos,
+          1,
+          p.kind === 'aura_bolt' ? 0xc084fc : p.kind === 'flare' ? 0xfb7185 : 0xf97316,
+          1.8,
+          0.75,
+          0.25
+        );
       }
 
       if (p.life <= 0) {

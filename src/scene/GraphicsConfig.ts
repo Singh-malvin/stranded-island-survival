@@ -141,6 +141,8 @@ export interface ControlKeybinds {
   journal: string;
   map: string;
   photoMode: string;
+  auraSight: string;
+  sovereignCleave: string;
 }
 
 export const DEFAULT_KEYBINDS: ControlKeybinds = {
@@ -165,6 +167,8 @@ export const DEFAULT_KEYBINDS: ControlKeybinds = {
   journal: 'KeyJ',
   map: 'KeyM',
   photoMode: 'KeyP',
+  auraSight: 'KeyT',
+  sovereignCleave: 'KeyK',
 };
 
 export interface ExtendedGraphicsSettings {

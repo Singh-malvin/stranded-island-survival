@@ -46,6 +46,17 @@ export interface LoadedGLBSet {
     arrow: THREE.Group;
     fireBomb: THREE.Group;
     flareGun: THREE.Group;
+    auraRifle: THREE.Group;
+    harpoonGun: THREE.Group;
+    lockpick: THREE.Group;
+  };
+  companion: {
+    daniel: THREE.Group;
+    danielAnimations: THREE.AnimationClip[];
+  };
+  stronghold: {
+    citadel: THREE.Group;
+    shrine: THREE.Group;
   };
   boss: {
     lavansBali: THREE.Group;
@@ -264,6 +275,12 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
     loadOne('boss_arena_shore.glb', false),
     loadOne('aura_shade.glb', false),
     loadOne('aura_shockwave_ring.glb', false),
+    loadOne('weapon_aura_rifle.glb', true),
+    loadOne('weapon_harpoon_gun.glb', true),
+    loadOne('tool_lockpick.glb', true),
+    loadOneWithClips('daniel.glb', false),
+    loadOne('stronghold_citadel.glb', false),
+    loadOne('aura_shrine.glb', false),
   ]).then(
     ([
       fpArmsRes,
@@ -343,6 +360,12 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
       bossArenaShore,
       bossShade,
       bossRing,
+      tAuraRifle,
+      tHarpoonGun,
+      tLockpick,
+      danielRes,
+      strongholdCitadel,
+      auraShrine,
     ]) => ({
       fpArms: fpArmsRes.scene,
       fpArmsAnimations: fpArmsRes.animations,
@@ -386,6 +409,17 @@ export function loadAllGameGLBModels(): Promise<LoadedGLBSet> {
         arrow: tArrow,
         fireBomb: tFireBomb,
         flareGun: tFlareGun,
+        auraRifle: tAuraRifle,
+        harpoonGun: tHarpoonGun,
+        lockpick: tLockpick,
+      },
+      companion: {
+        daniel: danielRes.scene,
+        danielAnimations: danielRes.animations,
+      },
+      stronghold: {
+        citadel: strongholdCitadel,
+        shrine: auraShrine,
       },
       boss: {
         lavansBali: bossLavansRes.scene,

@@ -138,6 +138,42 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         handRollOffsetR: [0, 0, 0],
         handRollOffsetL: [0, 0, 0],
       };
+    case 'aura_rifle':
+      return {
+        itemId,
+        modelKey: 'auraRifle',
+        gripPose: 'twoHanded',
+        twoHanded: true,
+        scale: 0.96,
+        baseOffset: [0.19, -0.22, -0.46],
+        baseEuler: [0.02, Math.PI, 0.0],
+        handRollOffsetR: [0, 0, 0],
+        handRollOffsetL: [0, 0, 0],
+      };
+    case 'harpoon_gun':
+      return {
+        itemId,
+        modelKey: 'harpoonGun',
+        gripPose: 'twoHanded',
+        twoHanded: true,
+        scale: 0.96,
+        baseOffset: [0.20, -0.23, -0.47],
+        baseEuler: [0.02, Math.PI, 0.0],
+        handRollOffsetR: [0, 0, 0],
+        handRollOffsetL: [0, 0, 0],
+      };
+    case 'lockpick':
+      return {
+        itemId,
+        modelKey: 'lockpick',
+        gripPose: 'pinch',
+        twoHanded: false,
+        scale: 1.0,
+        baseOffset: [0.22, -0.20, -0.40],
+        baseEuler: [-0.20, Math.PI - 0.15, 0.0],
+        handRollOffsetR: [0, 0, 0],
+        handRollOffsetL: [0, 0, 0],
+      };
     case 'torch':
       return {
         itemId,
