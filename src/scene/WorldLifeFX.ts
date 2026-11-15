@@ -51,6 +51,8 @@ export class WorldLifeManager {
 
   private readonly breathBubblesGroup: THREE.Group;
   private readonly breathBubblePool: FloatingParticle[] = [];
+  private readonly breathPlaneGeo: THREE.PlaneGeometry;
+  private readonly breathAlphaTex: THREE.CanvasTexture;
   private breathTimer = 0;
   private bubbleTimer = 0;
 
@@ -256,6 +258,10 @@ export class WorldLifeManager {
 
     // 5. Cold Breath Vapor & Underwater Bubble Puffs
     this.breathBubblesGroup = new THREE.Group();
+    this.breathPlaneGeo = new THREE.PlaneGeometry(0.16, 0.16);
+    this.breathAlphaTex = WorldLifeManager.createSoftPuddleTexture();
+    this.geomDisposables.push(this.breathPlaneGeo);
+    this.texDisposables.push(this.breathAlphaTex);
     this.root.add(this.breathBubblesGroup);
   }
 
@@ -428,25 +434,27 @@ export class WorldLifeManager {
         this.breathTimer += dt;
         if (this.breathTimer >= 2.2) {
           this.breathTimer = 0;
-          const pGeo = new THREE.SphereGeometry(0.065, 6, 5);
           const pMat = new THREE.MeshBasicMaterial({
             color: 0xf1f5f9,
+            alphaMap: this.breathAlphaTex,
             transparent: true,
-            opacity: 0.34,
+            opacity: 0.14,
             depthWrite: false,
+            side: THREE.DoubleSide,
           });
-          const m = new THREE.Mesh(pGeo, pMat);
+          const m = new THREE.Mesh(this.breathPlaneGeo, pMat);
           m.position.set(
-            playerPos.x + cameraForward.x * 0.34,
-            playerPos.y - 0.12,
-            playerPos.z + cameraForward.z * 0.34
+            playerPos.x + cameraForward.x * 0.58,
+            playerPos.y - 0.24,
+            playerPos.z + cameraForward.z * 0.58
           );
+          m.lookAt(playerPos);
           this.breathBubblesGroup.add(m);
           this.breathBubblePool.push({
             mesh: m,
-            vel: new THREE.Vector3(cameraForward.x * 0.55, 0.24, cameraForward.z * 0.55),
+            vel: new THREE.Vector3(cameraForward.x * 0.5, -0.04, cameraForward.z * 0.5),
             age: 0,
-            maxAge: 0.95,
+            maxAge: 0.9,
             kind: 'breath',
           });
         }
@@ -457,15 +465,18 @@ export class WorldLifeManager {
         fp.age += dt;
         if (fp.age >= fp.maxAge) {
           this.breathBubblesGroup.remove(fp.mesh);
-          fp.mesh.geometry.dispose();
+          if (fp.kind === 'bubble') {
+            fp.mesh.geometry.dispose();
+          }
           (fp.mesh.material as THREE.Material).dispose();
         } else {
           fp.mesh.position.addScaledVector(fp.vel, dt);
           const r = fp.age / fp.maxAge;
           const mat = fp.mesh.material as THREE.MeshBasicMaterial;
           if (fp.kind === 'breath') {
-            fp.mesh.scale.setScalar(1 + r * 2.4);
-            mat.opacity = 0.34 * (1 - r);
+            fp.mesh.lookAt(playerPos);
+            fp.mesh.scale.setScalar(1 + r * 1.15);
+            mat.opacity = 0.14 * (1 - r);
           } else {
             mat.opacity = 0.68 * (1 - r);
           }

@@ -5997,7 +5997,7 @@ export class SurvivalScene3D {
       this.starsMat.opacity = nightFactor * (1 - weather.rain * 0.85) * 0.9;
     }
     if (this.moonMesh) {
-      this.moonMesh.visible = nightFactor > 0.15 && weather.rain < 0.7;
+      this.moonMesh.visible = !this.skyDome && nightFactor > 0.15 && weather.rain < 0.7;
       this.moonMesh.position.set(
         this.camera.position.x - sunX * 2.2,
         Math.max(42, -sunY * 2.2),
