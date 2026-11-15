@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { WORLD_VISUAL_TUNING } from '../survival/config.ts';
-import type { WorldCollider } from '../survival/world.ts';
+import { GRAPHICS_TUNING, WORLD_VISUAL_TUNING } from '../survival/config.ts';
+import { sampleTerrainGridBilinear, type WorldCollider } from '../survival/world.ts';
 import type { GraphicsQuality } from './GraphicsConfig.ts';
 import type { PBRTextureBank } from './PBRTextures.ts';
 
@@ -34,6 +34,7 @@ export interface WorldAssetsHandle {
   csmHookEntries: CSMHookEntry[];
   totalInstances: number;
   setQuality: (quality: GraphicsQuality, castShadow: boolean, receiveShadow: boolean) => void;
+  setReflectionMode: (reflecting: boolean) => void;
   update: (
     tSec: number,
     windSpeed: number,
@@ -579,6 +580,7 @@ export async function loadBlenderWorldAssets(
         sm.envMapIntensity = WORLD_VISUAL_TUNING.CLIFF_ENV_INTENSITY;
         sm.roughness = Math.max(sm.roughness, 0.72);
         sm.metalness = 0.0;
+        sm.side = THREE.DoubleSide;
         const ck = `stranded-cliff-${branchTag}-${idx}`;
         sm.customProgramCacheKey = () => ck;
         sm.onBeforeCompile = cliffHook;
@@ -643,8 +645,40 @@ export async function loadBlenderWorldAssets(
   const buckets = new Map<number, ParsedVegInstance[]>();
   const boulderColliders: WorldCollider[] = [];
 
+  // Ground any floating talus boulders onto cliff shelves or underlying island terrain
+  cliffsLod0?.updateMatrixWorld(true);
+  const boulderCliffTargets = cliffsLod0 ? [cliffsLod0] : [];
+  const boulderGroundRay = new THREE.Raycaster();
+  const boulderRayOrigin = new THREE.Vector3();
+  const boulderRayDown = new THREE.Vector3(0, -1, 0);
+
   for (let i = 0; i < vegInstances.length; i++) {
     const inst = vegInstances[i];
+    if (inst.typeId === 5) {
+      const terrY = sampleTerrainGridBilinear(terrainGrid, inst.px, inst.pz);
+      if (terrY !== null && inst.py > terrY + 0.65) {
+        let grounded = false;
+        if (boulderCliffTargets.length > 0) {
+          boulderRayOrigin.set(inst.px, inst.py + 1.2, inst.pz);
+          boulderGroundRay.set(boulderRayOrigin, boulderRayDown);
+          boulderGroundRay.far = Math.max(8, inst.py - terrY + 4);
+          const hits = boulderGroundRay.intersectObjects(boulderCliffTargets, true);
+          if (hits.length > 0 && hits[0].point.y > terrY + 0.35) {
+            const drop = inst.py - hits[0].point.y;
+            if (drop <= 1.2) {
+              inst.py = Math.min(inst.py, hits[0].point.y - 0.06);
+              grounded = true;
+            } else if (drop <= GRAPHICS_TUNING.BOULDER_MAX_CLIFF_DROP_M) {
+              inst.py = hits[0].point.y - 0.12;
+              grounded = true;
+            }
+          }
+        }
+        if (!grounded) {
+          inst.py = terrY - 0.14;
+        }
+      }
+    }
     const gx = Math.max(0, Math.min(gridN - 1, Math.floor(((inst.px + halfM) / spanM) * gridN)));
     const gz = Math.max(0, Math.min(gridN - 1, Math.floor(((inst.pz + halfM) / spanM) * gridN)));
     const key = gz * gridN + gx;
@@ -722,7 +756,7 @@ export async function loadBlenderWorldAssets(
         for (const prim of prims) {
           const im = new THREE.InstancedMesh(prim.geometry, prim.material, tList.length);
           im.frustumCulled = false; // chunk culling done via exact precomputed chunk bounding sphere
-          const castsSunShadow = typeId === 5 || typeId === 6;
+          const castsSunShadow = typeId === 6;
           im.castShadow = castsSunShadow && castShadow && (lodLevel === 0 || !protosLod0.has(typeId));
           im.receiveShadow = receiveShadow && (typeId === 5 || typeId === 6);
 
@@ -804,6 +838,37 @@ export async function loadBlenderWorldAssets(
   };
 
   setQuality(initialQuality, castShadow, receiveShadow);
+
+  const reflectionHiddenBatches: THREE.Object3D[] = [];
+  let savedReflLod0Vis = true;
+  let savedReflLod1Vis = false;
+  const setReflectionMode = (reflecting: boolean) => {
+    if (reflecting) {
+      reflectionHiddenBatches.length = 0;
+      if (cliffsLod0) savedReflLod0Vis = cliffsLod0.visible;
+      if (cliffsLod1) savedReflLod1Vis = cliffsLod1.visible;
+      if (cliffsLod1) {
+        if (cliffsLod0) cliffsLod0.visible = false;
+        cliffsLod1.visible = true;
+      }
+      for (const chunk of chunks) {
+        if (!chunk.group.visible) continue;
+        for (const batch of chunk.batches) {
+          if (batch.typeId <= 4 && batch.mesh.visible) {
+            batch.mesh.visible = false;
+            reflectionHiddenBatches.push(batch.mesh);
+          }
+        }
+      }
+    } else {
+      if (cliffsLod0) cliffsLod0.visible = savedReflLod0Vis;
+      if (cliffsLod1) cliffsLod1.visible = savedReflLod1Vis;
+      for (let i = 0; i < reflectionHiddenBatches.length; i++) {
+        reflectionHiddenBatches[i].visible = true;
+      }
+      reflectionHiddenBatches.length = 0;
+    }
+  };
 
   const frustum = new THREE.Frustum();
   const projScreenMatrix = new THREE.Matrix4();
@@ -905,6 +970,7 @@ export async function loadBlenderWorldAssets(
     csmHookEntries,
     totalInstances: vegInstances.length,
     setQuality,
+    setReflectionMode,
     update,
     dispose,
   };

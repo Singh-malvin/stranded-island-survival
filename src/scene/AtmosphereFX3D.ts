@@ -806,40 +806,67 @@ export function updateAtmosphereFXRig(
   }
   rig.lightningFlash = Math.max(0, rig.lightningFlash - delta * 3.4);
 
-  rig.mistGroup.visible = mistAndShaftsEnabled && !inVoyage;
+  const showMist = mistAndShaftsEnabled && !inVoyage;
+  const isDawnDusk = (hour >= 4.5 && hour <= 8.8) || (hour >= 17.0 && hour <= 20.5);
+  const targetMistOpacity = showMist ? 0.1 + (isDawnDusk ? 0.14 : 0) + weather.rain * 0.15 : 0;
+  const mistMat = rig.mistPatches[0]?.mesh.material as THREE.MeshBasicMaterial | undefined;
+  if (mistMat) {
+    mistMat.opacity = THREE.MathUtils.damp(mistMat.opacity, targetMistOpacity, 2.4, delta);
+    rig.mistGroup.visible = mistMat.opacity > 0.002;
+  } else {
+    rig.mistGroup.visible = showMist;
+  }
   if (rig.mistGroup.visible) {
-    const isDawnDusk = (hour >= 4.5 && hour <= 8.8) || (hour >= 17.0 && hour <= 20.5);
-    const targetMistOpacity = 0.1 + (isDawnDusk ? 0.14 : 0) + weather.rain * 0.15;
-    const mat = rig.mistPatches[0]?.mesh.material as THREE.MeshBasicMaterial | undefined;
-    if (mat) {
-      mat.opacity = THREE.MathUtils.lerp(mat.opacity, targetMistOpacity, Math.min(1, delta * 2.5));
-    }
     for (const p of rig.mistPatches) {
       p.mesh.position.x = p.baseX + Math.sin(tSec * 0.16 + p.phase) * 3.2;
       p.mesh.position.z = p.baseZ + Math.cos(tSec * 0.13 + p.phase) * 2.6;
     }
   }
 
-  const showShafts = mistAndShaftsEnabled && !inVoyage && sunElev > 0.08 && weather.rain < 0.45;
-  rig.shaftsGroup.visible = showShafts;
-  if (showShafts) {
-    const goldenWeight = sunElev < 0.35 ? 1.15 : 0.72;
-    rig.shaftMat.uniforms.uOpacity.value = 0.036 * goldenWeight * (1 - weather.rain * 1.4);
-  }
+  const sunShaftWeight =
+    THREE.MathUtils.smoothstep(sunElev, 0.02, 0.16) *
+    (1 - THREE.MathUtils.smoothstep(weather.rain, 0.12, 0.55));
+  const goldenWeight = THREE.MathUtils.lerp(1.15, 0.72, THREE.MathUtils.smoothstep(sunElev, 0.15, 0.48));
+  const targetShaftOpacity =
+    mistAndShaftsEnabled && !inVoyage ? 0.036 * goldenWeight * sunShaftWeight : 0;
+  rig.shaftMat.uniforms.uOpacity.value = THREE.MathUtils.damp(
+    rig.shaftMat.uniforms.uOpacity.value,
+    targetShaftOpacity,
+    2.6,
+    delta
+  );
+  rig.shaftsGroup.visible = rig.shaftMat.uniforms.uOpacity.value > 0.0005;
 
-  const isTwilightOrNight = hour < 6.2 || hour > 17.5;
-  const showFlies = firefliesEnabled && !inVoyage && isTwilightOrNight && weather.kind !== 'storm';
-  rig.fireflies.visible = showFlies;
-  if (showFlies) {
-    const pulse = 0.55 + Math.sin(tSec * 2.6) * 0.3;
-    rig.fireflyMat.opacity = pulse * (1 - weather.rain * 0.8);
+  const twilightBlend =
+    hour < 6.4
+      ? 1 - THREE.MathUtils.smoothstep(hour, 5.4, 6.4)
+      : THREE.MathUtils.smoothstep(hour, 17.2, 18.2);
+  const stormQuiet = weather.kind === 'storm' ? 0 : 1 - THREE.MathUtils.smoothstep(weather.rain, 0.2, 0.75);
+  const pulse = 0.55 + Math.sin(tSec * 2.6) * 0.3;
+  const targetFlyOpacity =
+    firefliesEnabled && !inVoyage ? pulse * twilightBlend * stormQuiet : 0;
+  rig.fireflyMat.opacity = THREE.MathUtils.damp(
+    rig.fireflyMat.opacity,
+    targetFlyOpacity,
+    3.0,
+    delta
+  );
+  rig.fireflies.visible = rig.fireflyMat.opacity > 0.004;
+  if (rig.fireflies.visible) {
     rig.fireflies.rotation.y = tSec * 0.025;
   }
 
-  // Sunlit dust motes drift slowly around player during clear/sunny hours
-  const showDust = mistAndShaftsEnabled && !inVoyage && sunElev > 0.05 && weather.rain < 0.35;
-  rig.dustMotes.visible = showDust;
-  if (showDust) {
+  // Sunlit dust motes drift slowly around player and fade smoothly across clouds/sunset
+  const dustSunWeight =
+    THREE.MathUtils.smoothstep(sunElev, 0.01, 0.15) *
+    (1 - THREE.MathUtils.smoothstep(weather.rain, 0.1, 0.45));
+  const targetDustOpacity =
+    mistAndShaftsEnabled && !inVoyage
+      ? (0.28 + (1 - Math.abs(sunElev - 0.35)) * 0.16) * dustSunWeight
+      : 0;
+  rig.dustMat.opacity = THREE.MathUtils.damp(rig.dustMat.opacity, targetDustOpacity, 2.8, delta);
+  rig.dustMotes.visible = rig.dustMat.opacity > 0.004;
+  if (rig.dustMotes.visible) {
     if (playerPos) {
       rig.dustMotes.position.set(
         playerPos.x,
@@ -847,7 +874,6 @@ export function updateAtmosphereFXRig(
         playerPos.z
       );
     }
-    rig.dustMat.opacity = (0.28 + (1 - Math.abs(sunElev - 0.35)) * 0.16) * (1 - weather.rain * 1.5);
     const pos = rig.dustMotes.geometry.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) {
       let x = pos.getX(i) + (Math.sin(tSec * 0.45 + i * 1.7) * 0.14 + weather.wind * 0.25) * delta;

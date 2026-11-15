@@ -57,11 +57,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'hatchetStone',
         gripPose: 'power',
         twoHanded: false,
-        scale: 0.92,
-        baseOffset: [0.22, -0.25, -0.46],
+        scale: 0.94,
+        baseOffset: [0.22, -0.24, -0.39],
         baseEuler: [-0.44, 0.30, -0.14],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
         metalTint: itemId === 'metal_axe' ? 0xb8c2cc : undefined,
       };
     case 'stone_pick':
@@ -71,11 +71,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'pickaxeFlint',
         gripPose: 'twoHanded',
         twoHanded: true,
-        scale: 0.92,
-        baseOffset: [0.19, -0.26, -0.47],
-        baseEuler: [-0.42, 0.26, -0.14],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        scale: 0.90,
+        baseOffset: [0.16, -0.25, -0.34],
+        baseEuler: [-0.42, 0.45, -0.14],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
         metalTint: itemId === 'metal_pick' ? 0xc0cad4 : undefined,
       };
     case 'spear':
@@ -84,11 +84,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'spear',
         gripPose: 'twoHanded',
         twoHanded: true,
-        scale: 0.95,
-        baseOffset: [0.20, -0.26, -0.44],
-        baseEuler: [-1.22, 0.14, 0.08],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        scale: 0.72,
+        baseOffset: [0.06, -0.24, -0.20],
+        baseEuler: [-1.14, 0.84, 0.16],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'machete':
       return {
@@ -97,10 +97,10 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         gripPose: 'power',
         twoHanded: false,
         scale: 1.0,
-        baseOffset: [0.23, -0.26, -0.45],
+        baseOffset: [0.23, -0.25, -0.43],
         baseEuler: [-0.50, 0.26, -0.14],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'bow':
       return {
@@ -108,11 +108,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'bow',
         gripPose: 'power',
         twoHanded: true,
-        scale: 0.94,
-        baseOffset: [-0.10, -0.18, -0.46],
-        baseEuler: [0.06, Math.PI - 0.18, -0.22],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        scale: 0.50,
+        baseOffset: [0.05, -0.10, -0.44],
+        baseEuler: [0.08, Math.PI + 0.82, -0.76],
+        handRollOffsetR: [0.008, -2.442, -3.142],
+        handRollOffsetL: [1.058, 0.358, 2.808],
       };
     case 'fire_bomb':
       return {
@@ -123,8 +123,8 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         scale: 0.95,
         baseOffset: [0.22, -0.22, -0.43],
         baseEuler: [-0.15, 0.25, -0.08],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        handRollOffsetR: [1.547, 1.093, -1.851],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'flare_gun':
       return {
@@ -132,11 +132,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'flareGun',
         gripPose: 'power',
         twoHanded: false,
-        scale: 1.05,
-        baseOffset: [0.21, -0.21, -0.42],
-        baseEuler: [0.02, Math.PI, 0.0],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        scale: 1.0,
+        baseOffset: [0.17, -0.19, -0.35],
+        baseEuler: [0.02, Math.PI + 0.08, 0.0],
+        handRollOffsetR: [-2.12, -1.242, 0.918],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'aura_rifle':
       return {
@@ -144,11 +144,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'auraRifle',
         gripPose: 'twoHanded',
         twoHanded: true,
-        scale: 0.96,
-        baseOffset: [0.19, -0.22, -0.46],
-        baseEuler: [0.02, Math.PI, 0.0],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        scale: 0.82,
+        baseOffset: [0.11, -0.19, -0.21],
+        baseEuler: [0.03, Math.PI + 0.28, 0.0],
+        handRollOffsetR: [2.899, -1.069, 1.027],
+        handRollOffsetL: [1.293, 0.814, 0.027],
       };
     case 'harpoon_gun':
       return {
@@ -156,11 +156,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'harpoonGun',
         gripPose: 'twoHanded',
         twoHanded: true,
-        scale: 0.96,
-        baseOffset: [0.20, -0.23, -0.47],
-        baseEuler: [0.02, Math.PI, 0.0],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        scale: 0.82,
+        baseOffset: [0.11, -0.20, -0.21],
+        baseEuler: [0.02, Math.PI + 0.28, 0.0],
+        handRollOffsetR: [2.895, -1.07, 1.033],
+        handRollOffsetL: [1.163, 0.966, 0.151],
       };
     case 'lockpick':
       return {
@@ -169,10 +169,10 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         gripPose: 'pinch',
         twoHanded: false,
         scale: 1.0,
-        baseOffset: [0.22, -0.20, -0.40],
-        baseEuler: [-0.20, Math.PI - 0.15, 0.0],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        baseOffset: [0.20, -0.20, -0.36],
+        baseEuler: [-0.20, 2.99, 0.0],
+        handRollOffsetR: [2.267, -1.394, 0.67],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'torch':
       return {
@@ -180,11 +180,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'torchHand',
         gripPose: 'power',
         twoHanded: false,
-        scale: 0.98,
-        baseOffset: [0.24, -0.28, -0.44],
+        scale: 1.0,
+        baseOffset: [0.24, -0.27, -0.42],
         baseEuler: [-0.28, 0.08, -0.10],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'lantern':
       return {
@@ -192,11 +192,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'lantern',
         gripPose: 'power',
         twoHanded: false,
-        scale: 0.95,
-        baseOffset: [0.24, -0.14, -0.46],
+        scale: 1.0,
+        baseOffset: [0.23, -0.15, -0.44],
         baseEuler: [0.05, 0.25, 0.0],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'hammer_build':
     case 'campfire_kit':
@@ -206,11 +206,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'hammerCraft',
         gripPose: 'power',
         twoHanded: false,
-        scale: 0.96,
-        baseOffset: [0.22, -0.25, -0.45],
+        scale: 1.0,
+        baseOffset: [0.22, -0.25, -0.43],
         baseEuler: [-0.40, 0.24, -0.10],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'water_bottle_clean':
     case 'water_bottle_dirty':
@@ -220,11 +220,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'waterContainer',
         gripPose: 'power',
         twoHanded: false,
-        scale: 0.98,
-        baseOffset: [0.21, -0.24, -0.43],
-        baseEuler: [-0.14, -0.35, 0.08],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        scale: 1.0,
+        baseOffset: [0.19, -0.24, -0.37],
+        baseEuler: [-0.14, 0.35, 0.08],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'coconut':
     case 'cooked_meat':
@@ -239,11 +239,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'foodRation',
         gripPose: 'food',
         twoHanded: true,
-        scale: 0.92,
-        baseOffset: [0.16, -0.22, -0.42],
+        scale: 1.0,
+        baseOffset: [0.14, -0.22, -0.37],
         baseEuler: [-0.35, 0.25, 0.0],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'rope':
     case 'fibre':
@@ -253,11 +253,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'ropeCoil',
         gripPose: 'pinch',
         twoHanded: false,
-        scale: 0.88,
+        scale: 1.0,
         baseOffset: [0.21, -0.22, -0.42],
         baseEuler: [0.68, 0.22, 0.14],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     case 'stick':
     case 'driftwood':
@@ -267,11 +267,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'branchFallen',
         gripPose: 'power',
         twoHanded: true,
-        scale: 0.82,
-        baseOffset: [0.20, -0.25, -0.43],
-        baseEuler: [-1.08, 0.18, -0.08],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        scale: 0.90,
+        baseOffset: [0.16, -0.25, -0.33],
+        baseEuler: [-1.04, 0.44, -0.08],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
     default:
       // Flint, stone, ore, herbs, poultice, small craftables
@@ -280,11 +280,11 @@ export function resolveHeldItemSpec(itemId: ItemId | 'hammer_build' | null): Hel
         modelKey: 'flintSharp',
         gripPose: 'pinch',
         twoHanded: false,
-        scale: 0.94,
+        scale: 1.0,
         baseOffset: [0.21, -0.21, -0.41],
         baseEuler: [-0.25, 0.25, -0.10],
-        handRollOffsetR: [0, 0, 0],
-        handRollOffsetL: [0, 0, 0],
+        handRollOffsetR: [0, Math.PI, 0],
+        handRollOffsetL: [0, Math.PI, 0],
       };
   }
 }
@@ -476,6 +476,7 @@ const _targetR = new THREE.Vector3();
 const _targetL = new THREE.Vector3();
 const _quatR = new THREE.Quaternion();
 const _quatL = new THREE.Quaternion();
+const _rollQuat = new THREE.Quaternion();
 const _eulerScratch = new THREE.Euler();
 
 export class FirstPersonIKRig {
@@ -497,6 +498,12 @@ export class FirstPersonIKRig {
   private activeGripR: THREE.Object3D | null = null;
   private activeGripL: THREE.Object3D | null = null;
   private readonly itemCache: Map<string, THREE.Group> = new Map();
+  private readonly restBonePoses: Array<{
+    bone: THREE.Bone;
+    pos: THREE.Vector3;
+    quat: THREE.Quaternion;
+    scale: THREE.Vector3;
+  }> = [];
 
   // MW sway spring-damper state
   private swayX = 0;
@@ -508,9 +515,11 @@ export class FirstPersonIKRig {
   private wallPullback = 0;
   private offhandIKBlend = 0;
 
-  // Impact & Inspect state
+  // Impact, Recoil, Equip Draw & Inspect state
   private impactHitstopTimer = 0;
   private impactRecoil = 0;
+  private weaponRecoil = 0;
+  private equipDrawBlend = 1;
   private inspectTimer = 0;
   private inspectActive = false;
 
@@ -603,7 +612,11 @@ export class FirstPersonIKRig {
   }
 
   private collectChain(side: 'L' | 'R'): ArmBoneChain {
-    const getB = (n: string) => (this.armsModel.getObjectByName(n) as THREE.Bone | undefined) ?? null;
+    const getB = (n: string) =>
+      ((this.armsModel.getObjectByName(n) ??
+        this.armsModel.getObjectByName(THREE.PropertyBinding.sanitizeNodeName(n))) as
+        | THREE.Bone
+        | undefined) ?? null;
     const upper = getB(`upper_arm.${side}`);
     const mid = getB(`forearm.${side}`);
     const wrist = getB(`wrist.${side}`);
@@ -657,6 +670,8 @@ export class FirstPersonIKRig {
     this.currentSpec = resolveHeldItemSpec(itemId);
     this.inspectActive = false;
     this.inspectTimer = 0;
+    this.equipDrawBlend = itemId ? 0 : 0.45;
+    this.weaponRecoil = 0;
 
     if (this.activeItemClone) {
       this.activeItemClone.visible = false;
@@ -702,6 +717,10 @@ export class FirstPersonIKRig {
   public notifyImpactHit(): void {
     this.impactHitstopTimer = IK_SWAY_TUNING.IMPACT_HITSTOP_SEC;
     this.impactRecoil = 1.0;
+  }
+
+  public notifyWeaponFire(kickScale: number = 1.0): void {
+    this.weaponRecoil = Math.min(1.5, Math.max(this.weaponRecoil, kickScale));
   }
 
   public toggleInspect(): boolean {
@@ -796,9 +815,10 @@ export class FirstPersonIKRig {
 
   private applyFingerCurl(chain: ArmBoneChain, pose: FingerGripPose, blend: number): void {
     const p = FINGER_POSES[pose];
+    const sideSign = chain === this.boneR ? 1 : -1;
     const curlChain = (bones: THREE.Bone[], amount: number) => {
       for (let i = 0; i < bones.length; i++) {
-        bones[i].rotation.x += amount * blend * (i === 0 ? 0.62 : i === 1 ? 0.78 : 0.65);
+        bones[i].rotation.x -= amount * blend * (i === 0 ? 0.72 : i === 1 ? 0.90 : 0.78);
       }
     };
     curlChain(chain.fingers.index, p.index);
@@ -806,11 +826,16 @@ export class FirstPersonIKRig {
     curlChain(chain.fingers.ring, p.ring);
     curlChain(chain.fingers.pinky, p.pinky);
     if (chain.fingers.thumb[0]) {
-      chain.fingers.thumb[0].rotation.z -= p.thumb01 * blend * 0.32;
-      chain.fingers.thumb[0].rotation.x += p.thumb01 * blend * 0.42;
+      chain.fingers.thumb[0].rotation.y -= sideSign * p.thumb01 * blend * 0.55;
+      chain.fingers.thumb[0].rotation.z -= sideSign * p.thumb01 * blend * 0.28;
     }
-    if (chain.fingers.thumb[1]) chain.fingers.thumb[1].rotation.x += p.thumbTip * blend * 0.56;
-    if (chain.fingers.thumb[2]) chain.fingers.thumb[2].rotation.x += p.thumbTip * blend * 0.48;
+    if (chain.fingers.thumb[1]) {
+      chain.fingers.thumb[1].rotation.z -= sideSign * p.thumbTip * blend * 0.48;
+      chain.fingers.thumb[1].rotation.y += sideSign * p.thumbTip * blend * 0.42;
+    }
+    if (chain.fingers.thumb[2]) {
+      chain.fingers.thumb[2].rotation.z -= sideSign * p.thumbTip * blend * 0.32;
+    }
   }
 
   public update(ctx: IKFrameContext): void {
@@ -825,6 +850,49 @@ export class FirstPersonIKRig {
       this.impactHitstopTimer = Math.max(0, this.impactHitstopTimer - dt);
     }
     this.impactRecoil = Math.max(0, this.impactRecoil - dt * IK_SWAY_TUNING.IMPACT_RECOIL_DECAY_SPEED);
+    this.weaponRecoil = Math.max(0, this.weaponRecoil - dt * IK_SWAY_TUNING.WEAPON_RECOIL_DECAY_SPEED);
+    this.equipDrawBlend = THREE.MathUtils.damp(
+      this.equipDrawBlend,
+      1,
+      IK_SWAY_TUNING.EQUIP_DRAW_SPEED,
+      dt
+    );
+
+    // Restore rest transforms before mixer evaluation so sparse clips never retain stale IK rotations/stretch
+    if (this.restBonePoses.length === 0) {
+      const recordChain = (c: ArmBoneChain) => {
+        const list: Array<THREE.Bone | null> = [
+          c.upper,
+          c.mid,
+          c.wrist,
+          c.hand,
+          ...c.fingers.index,
+          ...c.fingers.middle,
+          ...c.fingers.ring,
+          ...c.fingers.pinky,
+          ...c.fingers.thumb,
+        ];
+        for (const b of list) {
+          if (b) {
+            this.restBonePoses.push({
+              bone: b,
+              pos: b.position.clone(),
+              quat: b.quaternion.clone(),
+              scale: b.scale.clone(),
+            });
+          }
+        }
+      };
+      recordChain(this.boneR);
+      recordChain(this.boneL);
+    } else {
+      for (let i = 0; i < this.restBonePoses.length; i++) {
+        const entry = this.restBonePoses[i];
+        entry.bone.position.copy(entry.pos);
+        entry.bone.quaternion.copy(entry.quat);
+        entry.bone.scale.copy(entry.scale);
+      }
+    }
 
     // Advance base skeleton animation clip cleanly
     if (this.activeClip !== ctx.activeActionClip) {
@@ -926,26 +994,43 @@ export class FirstPersonIKRig {
     let swingRotZ = 0;
     if (ctx.swingProgress >= 0) {
       const p = ctx.swingProgress;
-      const windUp = p < 0.28 ? -Math.sin((p / 0.28) * Math.PI * 0.5) : 0;
-      const strike =
-        p >= 0.28 && p < 0.62
-          ? Math.sin(((p - 0.28) / 0.34) * Math.PI)
-          : p >= 0.62
-            ? Math.sin(((p - 0.62) / 0.38) * Math.PI * 0.5) * 0.15
-            : 0;
-      if (ctx.swingKind === 'spear') {
-        swingPosZ = windUp * -0.10 - strike * 0.32;
-        swingPosX = -strike * 0.05;
-        swingRotX = strike * 0.14;
+      const isRanged =
+        ctx.swingKind === 'bow' ||
+        ctx.swingKind === 'flare_gun' ||
+        ctx.swingKind === 'aura_rifle' ||
+        ctx.swingKind === 'harpoon_gun';
+      if (isRanged) {
+        // Subtle trigger settle / bow release follow-through (recoil comes cleanly from weaponRecoil)
+        const releasePulse = Math.sin(Math.min(1, p * 2.2) * Math.PI);
+        swingPosZ = releasePulse * 0.024;
+        swingRotX = -releasePulse * 0.04;
       } else {
-        swingPosX = -strike * 0.14 + windUp * -0.06;
-        swingPosY = -strike * 0.12 - windUp * 0.10;
-        swingPosZ = -strike * 0.12 + windUp * -0.05;
-        swingRotX = windUp * -0.58 + strike * 1.08;
-        swingRotY = -strike * 0.34;
-        swingRotZ = -strike * 0.26;
+        const windUp = p < 0.28 ? -Math.sin((p / 0.28) * Math.PI * 0.5) : 0;
+        const strike =
+          p >= 0.28 && p < 0.62
+            ? Math.sin(((p - 0.28) / 0.34) * Math.PI)
+            : p >= 0.62
+              ? Math.sin(((p - 0.62) / 0.38) * Math.PI * 0.5) * 0.15
+              : 0;
+        if (ctx.swingKind === 'spear') {
+          swingPosZ = windUp * -0.10 - strike * 0.32;
+          swingPosX = -strike * 0.05;
+          swingRotX = strike * 0.14;
+        } else {
+          swingPosX = -strike * 0.14 + windUp * -0.06;
+          swingPosY = -strike * 0.12 - windUp * 0.10;
+          swingPosZ = -strike * 0.12 + windUp * -0.05;
+          swingRotX = windUp * -0.58 + strike * 1.08;
+          swingRotY = -strike * 0.34;
+          swingRotZ = -strike * 0.26;
+        }
       }
     }
+
+    const drawInv = 1 - this.equipDrawBlend;
+    const equipOffsetY = -drawInv * IK_SWAY_TUNING.EQUIP_DRAW_DROP_Y;
+    const equipPitch = -drawInv * 0.42;
+    const equipRoll = drawInv * 0.22;
 
     const inspectBlend = this.inspectActive
       ? Math.sin(Math.min(1, 1 - this.inspectTimer / IK_SWAY_TUNING.INSPECT_DURATION_SEC) * Math.PI)
@@ -1006,11 +1091,13 @@ export class FirstPersonIKRig {
         ctx.biteEatBlend * 0.13 +
         chewBob +
         drinkBottle * 0.14 +
+        equipOffsetY +
         inspectBlend * IK_SWAY_TUNING.INSPECT_POS_OFFSET[1],
       bz +
         this.sprintPose * IK_SWAY_TUNING.SPRINT_FORWARD_Z +
         this.wallPullback * IK_SWAY_TUNING.WALL_PULLBACK_MAX_Z +
         this.impactRecoil * IK_SWAY_TUNING.IMPACT_RECOIL_BACK_Z +
+        this.weaponRecoil * IK_SWAY_TUNING.WEAPON_RECOIL_KICK_Z +
         swingPosZ +
         euphZ +
         block * 0.08 +
@@ -1027,6 +1114,8 @@ export class FirstPersonIKRig {
         this.sprintPose * IK_SWAY_TUNING.SPRINT_TILT_PITCH +
         this.wallPullback * IK_SWAY_TUNING.WALL_PULLBACK_PITCH +
         this.impactRecoil * IK_SWAY_TUNING.IMPACT_RECOIL_PITCH +
+        this.weaponRecoil * IK_SWAY_TUNING.WEAPON_RECOIL_PITCH +
+        equipPitch +
         swingRotX +
         euphPitch -
         block * 0.35 -
@@ -1045,6 +1134,7 @@ export class FirstPersonIKRig {
       erz +
         this.swayX * IK_SWAY_TUNING.INERTIA_ROT_ROLL_MULT +
         this.sprintPose * IK_SWAY_TUNING.SPRINT_TILT_ROLL +
+        equipRoll +
         swingRotZ +
         block * 1.18 +
         dodge * 0.52 +
@@ -1069,6 +1159,12 @@ export class FirstPersonIKRig {
     if (hasItem && this.boneR.upper && this.boneR.mid && this.boneR.hand) {
       this.activeGripR!.getWorldPosition(_targetR);
       this.activeGripR!.getWorldQuaternion(_quatR);
+      const rOff = this.currentSpec.handRollOffsetR;
+      if (rOff[0] !== 0 || rOff[1] !== 0 || rOff[2] !== 0) {
+        _eulerScratch.set(rOff[0], rOff[1], rOff[2], 'XYZ');
+        _rollQuat.setFromEuler(_eulerScratch);
+        _quatR.multiply(_rollQuat);
+      }
       if (this.currentSpec.itemId === 'bow' && bowDraw > 0.01) {
         // Pull string hand cleanly back toward right cheek relative to camera root
         _tmpVecA.set(0.05, 0.03, 0.24).multiplyScalar(bowDraw).applyQuaternion(this.root.quaternion);
@@ -1094,7 +1190,7 @@ export class FirstPersonIKRig {
         _quatR,
         0.92
       );
-      this.applyFingerCurl(this.boneR, this.currentSpec.gripPose, 1.0);
+      this.applyFingerCurl(this.boneR, this.currentSpec.gripPose, 0.45 + 0.55 * this.equipDrawBlend);
     } else if (this.boneR.upper && this.boneR.mid && this.boneR.hand) {
       // Bare-hand IK: swim stroke, bandage wrap, map unfold, heat brow wipe, cough, cupped drinking, pickup reach, or Euphoria brace/flail
       const swim = ctx.swimBlend;
@@ -1113,6 +1209,11 @@ export class FirstPersonIKRig {
       ) {
         const reachArc =
           ctx.pickupProgress >= 0 ? Math.sin(ctx.pickupProgress * Math.PI) : 0;
+        const graspCurl =
+          ctx.pickupProgress >= 0
+            ? THREE.MathUtils.smoothstep(ctx.pickupProgress, 0.22, 0.52) *
+              (1 - THREE.MathUtils.smoothstep(ctx.pickupProgress, 0.85, 1.0))
+            : 0;
         const cupArc = ctx.cuppedDrinkBlend;
         const bandSweep = bandage > 0.02 ? Math.sin(ctx.elapsedSec * 13) * 0.055 * bandage : 0;
         const wipeSweep = heatWipe > 0.02 ? Math.sin(heatWipe * Math.PI) : 0;
@@ -1121,6 +1222,7 @@ export class FirstPersonIKRig {
         const swimPushZ = swim > 0.15 ? -Math.cos(swimAng) * 0.17 * swim : 0;
         _tmpVecA.set(
           0.16 -
+            reachArc * 0.04 -
             cupArc * 0.10 -
             inspectBlend * 0.08 -
             bandage * 0.18 +
@@ -1141,9 +1243,9 @@ export class FirstPersonIKRig {
             flail * flailAng * 0.12 -
             brace * 0.08 -
             exhausted * 0.03 -
-            (ctx.pickupReach === 'ground' ? reachArc * 0.16 : reachArc * 0.03),
+            (ctx.pickupReach === 'ground' ? reachArc * 0.15 : reachArc * 0.03),
           -0.42 -
-            reachArc * 0.18 -
+            reachArc * 0.20 -
             brace * 0.18 +
             cupArc * 0.10 +
             bandage * 0.08 +
@@ -1169,8 +1271,8 @@ export class FirstPersonIKRig {
         );
         this.applyFingerCurl(
           this.boneR,
-          cupArc > 0.2 ? 'cupped' : bandage > 0.2 || mapLook > 0.2 ? 'pinch' : reachArc > 0.35 ? 'power' : 'relaxed',
-          Math.max(0.45, Math.max(cupArc, reachArc, bandage, mapLook))
+          cupArc > 0.2 ? 'cupped' : bandage > 0.2 || mapLook > 0.2 ? 'pinch' : graspCurl > 0.2 ? 'power' : 'relaxed',
+          Math.max(0.45, Math.max(cupArc, graspCurl, bandage, mapLook))
         );
       } else {
         this.applyFingerCurl(this.boneR, 'relaxed', 0.65);
@@ -1180,6 +1282,7 @@ export class FirstPersonIKRig {
     // Left arm IK: engages on two-handed items, inspecting, cupped drinking, bandaging, map lookup, swim sweep, pickup reach, or brace
     const useLeftItemGrip =
       hasItem &&
+      ctx.pickupProgress < 0 &&
       this.activeGripL !== null &&
       (this.currentSpec.twoHanded || this.inspectActive || ctx.biteEatBlend > 0.1);
     this.offhandIKBlend = THREE.MathUtils.lerp(
@@ -1201,6 +1304,12 @@ export class FirstPersonIKRig {
       if (useLeftItemGrip && this.offhandIKBlend > 0.05) {
         this.activeGripL!.getWorldPosition(_targetL);
         this.activeGripL!.getWorldQuaternion(_quatL);
+        const lOff = this.currentSpec.handRollOffsetL;
+        if (lOff[0] !== 0 || lOff[1] !== 0 || lOff[2] !== 0) {
+          _eulerScratch.set(lOff[0], lOff[1], lOff[2], 'XYZ');
+          _rollQuat.setFromEuler(_eulerScratch);
+          _quatL.multiply(_rollQuat);
+        }
         _poleWorld
           .set(...IK_SWAY_TUNING.ELBOW_POLE_L)
           .applyMatrix4(this.root.matrixWorld);
@@ -1231,29 +1340,36 @@ export class FirstPersonIKRig {
       ) {
         const reachArc =
           ctx.pickupProgress >= 0 ? Math.sin(ctx.pickupProgress * Math.PI) : 0;
+        const graspCurl =
+          ctx.pickupProgress >= 0
+            ? THREE.MathUtils.smoothstep(ctx.pickupProgress, 0.22, 0.52) *
+              (1 - THREE.MathUtils.smoothstep(ctx.pickupProgress, 0.85, 1.0))
+            : 0;
+        // When holding a tool in the right hand, left hand reaches forward to scoop; when bare-handed, left hand counter-balances cleanly
+        const leftPickupWeight = hasItem ? 1.0 : 0.32;
         const cupArc = ctx.cuppedDrinkBlend;
         const swim = ctx.swimBlend;
         const swimAng = ctx.swimStrokePhase ?? ctx.elapsedSec * 5.2;
         const swimOutX = swim > 0.15 ? -Math.max(0, Math.sin(swimAng)) * 0.18 * swim : 0;
         const swimPushZ = swim > 0.15 ? -Math.cos(swimAng) * 0.17 * swim : 0;
         _tmpVecA.set(
-          -0.14 +
+          -0.16 +
             cupArc * 0.08 +
             bandage * 0.07 +
             mapLook * 0.02 +
-            reachArc * 0.12 +
+            reachArc * 0.05 * leftPickupWeight +
             swimOutX -
             flail * 0.09,
-          -0.25 +
+          -0.26 +
             cupArc * 0.13 +
             bandage * 0.04 +
             mapLook * 0.10 -
             flail * flailAng * 0.12 -
             brace * 0.08 -
             exhausted * 0.03 -
-            (ctx.pickupReach === 'ground' ? reachArc * 0.16 : reachArc * 0.03),
-          -0.40 -
-            reachArc * 0.22 -
+            (ctx.pickupReach === 'ground' ? reachArc * 0.15 * leftPickupWeight : reachArc * 0.03 * leftPickupWeight),
+          -0.41 -
+            reachArc * 0.20 * leftPickupWeight -
             brace * 0.18 +
             cupArc * 0.12 +
             bandage * 0.08 +
@@ -1277,11 +1393,18 @@ export class FirstPersonIKRig {
         );
         this.applyFingerCurl(
           this.boneL,
-          cupArc > 0.2 ? 'cupped' : mapLook > 0.2 ? 'pinch' : reachArc > 0.35 ? 'power' : 'relaxed',
-          Math.max(0.5, Math.max(cupArc, reachArc, mapLook))
+          cupArc > 0.2
+            ? 'cupped'
+            : mapLook > 0.2
+              ? 'pinch'
+              : hasItem && graspCurl > 0.2
+                ? 'power'
+                : 'relaxed',
+          Math.max(0.5, Math.max(cupArc, hasItem ? graspCurl : 0.45, mapLook))
         );
       } else {
         // Organic idle / sprint / walk offhand arm counter-balance with camera inertia
+        this.boneL.upper.rotation.x -= IK_SWAY_TUNING.OFFHAND_1H_DROP_PITCH;
         this.boneL.hand.rotation.x += this.swayY * 1.1;
         this.boneL.hand.rotation.y += this.swayX * 1.1;
         this.applyFingerCurl(this.boneL, 'relaxed', 0.65);

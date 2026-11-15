@@ -15,6 +15,7 @@
 
 import * as THREE from 'three';
 import { CSM } from 'three/addons/csm/CSM.js';
+import { mergeStaticMeshesByMaterial } from './meshMerge.ts';
 import {
   ACTION_TUNING,
   ANIMATION_TUNING,
@@ -258,6 +259,7 @@ interface Particle3D {
   gravity?: number;
   scaleCurve?: 'shrink' | 'smoke';
   sharedGeom?: boolean;
+  sharedMat?: boolean;
   flipbookTex?: THREE.Texture;
   flipbookFps?: number;
   billboard?: boolean;
@@ -282,7 +284,7 @@ interface ShelterMeshRecord {
   group: THREE.Group;
 }
 
-// Pre-allocated scratch math vectors outside frame loop
+// Pre-allocated scratch math vectors & colors outside frame loop
 const _forward = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _moveDir = new THREE.Vector3();
@@ -290,7 +292,78 @@ const _camDir = new THREE.Vector3();
 const _toTarget = new THREE.Vector3();
 const _skySunDir = new THREE.Vector3();
 const _sunWorldTmp = new THREE.Vector3();
+const _handPickupTarget = new THREE.Vector3();
 const _euler = new THREE.Euler();
+
+const _clearHorizonCol = new THREE.Color(0x74badb);
+const _rainHorizonCol = new THREE.Color(0x5c7286);
+const _clearZenithCol = new THREE.Color(0x1b589c);
+const _rainZenithCol = new THREE.Color(0x354759);
+const _dayHorizonCol = new THREE.Color();
+const _dayZenithCol = new THREE.Color();
+const _goldenHorizonCol = new THREE.Color(0xe6884e);
+const _goldenZenithCol = new THREE.Color(0x284770);
+const _nightHorizonCol = new THREE.Color(0x0b1a33);
+const _nightZenithCol = new THREE.Color(0x030816);
+const _targetSkyCol = new THREE.Color();
+const _targetZenithCol = new THREE.Color();
+const _sunDayCol = new THREE.Color(0xfff0d4);
+const _sunDuskCol = new THREE.Color(0xffb464);
+const _sunNightCol = new THREE.Color(0x6088c2);
+const _targetSunCol = new THREE.Color();
+const _duskHemiCol = new THREE.Color(0xdc9868);
+const _nightHemiCol = new THREE.Color(0x223862);
+const _targetHemiCol = new THREE.Color();
+const _dayGroundCol = new THREE.Color(0x645438);
+const _duskGroundCol = new THREE.Color(0x4a402a);
+const _nightGroundCol = new THREE.Color(0x121d30);
+const _targetGroundCol = new THREE.Color();
+const _caveSkyCol = new THREE.Color(0x0b1322);
+const _caveZenCol = new THREE.Color(0x050911);
+const _stormFogSlateCol = new THREE.Color(GRAPHICS_TUNING.STORM_FOG_SLATE_COLOR);
+const _stormFogTargetCol = new THREE.Color();
+
+function randomizeRainDrop(
+  out: Float32Array,
+  i: number,
+  halfExtent: number,
+  exclRadius: number,
+  heightRange: number,
+  randomY: boolean
+): void {
+  let x = (Math.random() - 0.5) * 2 * halfExtent;
+  let z = (Math.random() - 0.5) * 2 * halfExtent;
+  const rSq = x * x + z * z;
+  if (rSq < exclRadius * exclRadius) {
+    const invLen = rSq > 1e-6 ? 1 / Math.sqrt(rSq) : 0;
+    const dirX = invLen > 0 ? x * invLen : Math.cos(i * 2.39996);
+    const dirZ = invLen > 0 ? z * invLen : Math.sin(i * 2.39996);
+    const pushR = exclRadius + 0.35 + Math.random() * 2.5;
+    x = dirX * pushR;
+    z = dirZ * pushR;
+  }
+  out[i * 3] = x;
+  out[i * 3 + 1] = randomY ? Math.random() * heightRange : heightRange;
+  out[i * 3 + 2] = z;
+}
+const _lightningTintCol = new THREE.Color(0xcbd5e1);
+const _underwaterFogCol = new THREE.Color(GRAPHICS_TUNING.UNDERWATER_FOG_COLOR);
+
+function blendColors3(
+  out: THREE.Color,
+  a: THREE.Color,
+  wa: number,
+  b: THREE.Color,
+  wb: number,
+  c: THREE.Color,
+  wc: number
+): THREE.Color {
+  return out.setRGB(
+    a.r * wa + b.r * wb + c.r * wc,
+    a.g * wa + b.g * wb + c.g * wc,
+    a.b * wa + b.b * wb + c.b * wc
+  );
+}
 
 export const FRESHWATER_SPRING_POS = new THREE.Vector3(
   WORLD.SPRING_POS.x,
@@ -348,14 +421,17 @@ export class SurvivalScene3D {
 
   // World Props & Nodes
   private nodeDefs: GatherNodeDef[] = [];
-  private nodeMeshes: Map<string, { def: GatherNodeDef; group: THREE.Group; baseScale: number }> =
-    new Map();
+  private nodeMeshes: Map<
+    string,
+    { def: GatherNodeDef; group: THREE.Group; baseScale: number; available?: boolean }
+  > = new Map();
   private palmWindMeshes: THREE.Group[] = [];
   private landmarks: InteriorLandmarksHandle | null = null;
   private wildlife3D: Wildlife3DManager;
   private boatDock: BoatSlipwayRecord | null = null;
   private voyageDiorama: VoyageSceneController | null = null;
   private wasInVoyage: boolean = false;
+  private wasVoyageCulled: boolean = false;
   private campfires3D: Map<string, CampfireMeshRecord> = new Map();
   private campfireGhost: THREE.Group | null = null;
   private shelters3D: Map<string, ShelterMeshRecord> = new Map();
@@ -382,6 +458,23 @@ export class SurvivalScene3D {
   private particles: Particle3D[] = [];
   private forgeSmokeGeom: THREE.BufferGeometry | null = null;
   private forgeSmokeMat: THREE.MeshLambertMaterial | null = null;
+  private harvestPlaneGeom: THREE.BufferGeometry | null = null;
+  private stepPlaneGeom: THREE.BufferGeometry | null = null;
+  private chipGeoms: Record<'harvest' | 'stepDust' | 'stepWater', THREE.BufferGeometry> | null = null;
+  private chipMats: Record<'chop' | 'mine' | 'pickup' | 'dust' | 'splash', THREE.MeshLambertMaterial> | null = null;
+  private fallbackPickupGeom: THREE.BufferGeometry | null = null;
+  private fallbackPickupMat: THREE.MeshStandardMaterial | null = null;
+
+  // Smoothed continuous atmosphere, fog & underwater state (avoids 1-frame snaps)
+  private smoothFogColor: THREE.Color = new THREE.Color(0x6fa8c4);
+  private smoothZenithColor: THREE.Color = new THREE.Color(0x1b589c);
+  private smoothFogDensity: number = GRAPHICS_TUNING.BASE_FOG_DENSITY;
+  private smoothRainAtmo: number = 0;
+  private smoothStormAtmo: number = 0;
+  private smoothCaveFactor: number = 0;
+  private smoothUnderwaterFactor: number = 0;
+  private fogInitialized: boolean = false;
+  private lastColliderSignature: string = '';
 
   // First-person player state
   private playerPos: THREE.Vector3 = new THREE.Vector3(
@@ -397,6 +490,9 @@ export class SurvivalScene3D {
   private fpsValue: number = 60;
   private fpsFrames: number = 0;
   private fpsLastCheckMs: number = 0;
+  private readonly sceneStartMs: number = performance.now();
+  private gatherNodeProtoCache: Map<string, THREE.Group> = new Map();
+  private reflectionTempHiddenNodes: THREE.Object3D[] = [];
   private frameTimeMs: number = 16.6;
   private lastRenderTimestamp: number = 0;
   private extSettings: ExtendedGraphicsSettings = loadExtendedGraphicsSettings();
@@ -563,6 +659,9 @@ export class SurvivalScene3D {
     startPos: THREE.Vector3;
     elapsed: number;
     duration: number;
+    baseScale: number;
+    isFallback: boolean;
+    toLeftHand: boolean;
   }> = [];
 
   // Dual-Arm First-Person Hand & Tool Rig
@@ -921,116 +1020,142 @@ export class SurvivalScene3D {
           this.crashSiteGroup.add(panelDebris);
 
           this.enableGroupShadows(this.crashSiteGroup, castShad, castShad);
+          mergeStaticMeshesByMaterial(this.crashSiteGroup, new Set(this.crashSmokePuffs));
         }
 
-        // 3. Upgrade All Gather Nodes with Phase 1 GLB Models + Selective Shadow Casting (Phase 5.4)
+        // 3. Upgrade All Gather Nodes with Phase 1 GLB Models + Shared Merged Prototypes (Phase 5.4)
         for (const entry of this.nodeMeshes.values()) {
           const { def, group } = entry;
-          if (def.type === 'palm_tree') {
+          const applyProto = (
+            key: string,
+            cast: boolean,
+            receive: boolean,
+            factory: () => THREE.Group
+          ) => {
             group.clear();
+            const inst = this.cloneCachedNodePrototype(key, factory, { cast, receive });
+            while (inst.children.length > 0) {
+              group.add(inst.children[0]);
+            }
+          };
+
+          if (def.type === 'palm_tree') {
             const vIdx = Math.abs(Math.round(def.x * 7 + def.z * 13)) % 3;
-            const lod = new THREE.LOD();
-            const hi = models.palmTrees[vIdx].clone(true);
-            const lo = models.palmTreeLods[vIdx].clone(true);
-            lod.addLevel(hi, 0);
-            lod.addLevel(lo, 76);
-            group.add(lod);
-            this.enableGroupShadows(group, castShad, castShad);
+            applyProto(`glb:palm_tree:${vIdx}`, castShad, castShad, () => {
+              const g = new THREE.Group();
+              const lod = new THREE.LOD();
+              lod.addLevel(models.palmTrees[vIdx].clone(true), 0);
+              lod.addLevel(models.palmTreeLods[vIdx].clone(true), 76);
+              g.add(lod);
+              return g;
+            });
           } else if (
             def.type === 'boulder' ||
             def.type === 'iron_vein' ||
             def.type === 'copper_vein'
           ) {
-            group.clear();
-            const main = models.rocks.large.clone(true);
-            main.scale.setScalar(0.88);
-            group.add(main);
-            const side = models.rocks.medium.clone(true);
-            side.position.set(0.95, 0, 0.45);
-            side.rotation.y = 1.4;
-            group.add(side);
-            this.enableGroupShadows(group, castShad, castShad);
+            applyProto('glb:boulder_vein', castShad, castShad, () => {
+              const g = new THREE.Group();
+              const main = models.rocks.large.clone(true);
+              main.scale.setScalar(0.88);
+              g.add(main);
+              const side = models.rocks.medium.clone(true);
+              side.position.set(0.95, 0, 0.45);
+              side.rotation.y = 1.4;
+              g.add(side);
+              return g;
+            });
           } else if (def.type === 'loose_stone') {
-            group.clear();
-            const peb = models.environment.pebbleCluster.clone(true);
-            peb.scale.setScalar(0.95);
-            group.add(peb);
-            for (let i = 0; i < 2; i++) {
-              const st = models.rocks.small.clone(true);
-              st.scale.setScalar(0.76 - i * 0.12);
-              st.position.set((i - 0.5) * 0.32, 0, (i % 2) * 0.18);
-              st.rotation.y = i * 2.1;
-              group.add(st);
-            }
-            this.enableGroupShadows(group, false, castShad);
+            applyProto('glb:loose_stone', false, castShad, () => {
+              const g = new THREE.Group();
+              const peb = models.environment.pebbleCluster.clone(true);
+              peb.scale.setScalar(0.95);
+              g.add(peb);
+              for (let i = 0; i < 2; i++) {
+                const st = models.rocks.small.clone(true);
+                st.scale.setScalar(0.76 - i * 0.12);
+                st.position.set((i - 0.5) * 0.32, 0, (i % 2) * 0.18);
+                st.rotation.y = i * 2.1;
+                g.add(st);
+              }
+              return g;
+            });
           } else if (def.type === 'flint_nodule') {
-            group.clear();
-            const lod = new THREE.LOD();
-            const hi = models.tools.flintSharp.clone(true);
-            hi.scale.setScalar(1.35);
-            const lo = models.tools.flintSharpLod.clone(true);
-            lo.scale.setScalar(1.35);
-            lod.addLevel(hi, 0);
-            lod.addLevel(lo, 45);
-            group.add(lod);
-            this.enableGroupShadows(group, false, castShad);
+            applyProto('glb:flint_nodule', false, castShad, () => {
+              const g = new THREE.Group();
+              const lod = new THREE.LOD();
+              const hi = models.tools.flintSharp.clone(true);
+              hi.scale.setScalar(1.35);
+              const lo = models.tools.flintSharpLod.clone(true);
+              lo.scale.setScalar(1.35);
+              lod.addLevel(hi, 0);
+              lod.addLevel(lo, 45);
+              g.add(lod);
+              return g;
+            });
           } else if (def.type === 'driftwood') {
-            group.clear();
-            const lod = new THREE.LOD();
-            const hi = models.environment.driftwood.clone(true);
-            const lo = models.environment.driftwoodLod.clone(true);
-            lod.addLevel(hi, 0);
-            lod.addLevel(lo, 55);
-            group.add(lod);
-            const branch = models.tools.branchFallen.clone(true);
-            branch.position.set(0.28, 0.04, 0.24);
-            branch.rotation.y = 0.65;
-            group.add(branch);
-            this.enableGroupShadows(group, false, castShad);
+            applyProto('glb:driftwood', false, castShad, () => {
+              const g = new THREE.Group();
+              const lod = new THREE.LOD();
+              lod.addLevel(models.environment.driftwood.clone(true), 0);
+              lod.addLevel(models.environment.driftwoodLod.clone(true), 55);
+              g.add(lod);
+              const branch = models.tools.branchFallen.clone(true);
+              branch.position.set(0.28, 0.04, 0.24);
+              branch.rotation.y = 0.65;
+              g.add(branch);
+              return g;
+            });
           } else if (def.type === 'fibre_bush' || def.type === 'berry_bush') {
-            group.clear();
-            const lod = new THREE.LOD();
-            const hi = models.environment.bushTropical.clone(true);
-            const lo = models.environment.bushTropicalLod.clone(true);
-            lod.addLevel(hi, 0);
-            lod.addLevel(lo, 55);
-            group.add(lod);
-            this.enableGroupShadows(group, false, castShad);
+            applyProto('glb:bush_tropical', false, castShad, () => {
+              const g = new THREE.Group();
+              const lod = new THREE.LOD();
+              lod.addLevel(models.environment.bushTropical.clone(true), 0);
+              lod.addLevel(models.environment.bushTropicalLod.clone(true), 55);
+              g.add(lod);
+              return g;
+            });
           } else if (def.type === 'herb_patch') {
-            group.clear();
-            const lod = new THREE.LOD();
-            const hi = models.environment.fern.clone(true);
-            const lo = models.environment.fernLod.clone(true);
-            lod.addLevel(hi, 0);
-            lod.addLevel(lo, 48);
-            group.add(lod);
-            this.enableGroupShadows(group, false, castShad);
+            applyProto('glb:herb_patch', false, castShad, () => {
+              const g = new THREE.Group();
+              const lod = new THREE.LOD();
+              lod.addLevel(models.environment.fern.clone(true), 0);
+              lod.addLevel(models.environment.fernLod.clone(true), 48);
+              g.add(lod);
+              return g;
+            });
           } else if (def.type === 'shell_cluster') {
-            group.clear();
-            for (let i = 0; i < 3; i++) {
-              const sh = models.environment.shell.clone(true);
-              sh.scale.setScalar(0.85 + (i % 2) * 0.2);
-              sh.position.set((i - 1) * 0.24, 0.01, (i % 2) * 0.18);
-              sh.rotation.y = i * 1.9;
-              group.add(sh);
-            }
-            this.enableGroupShadows(group, false, castShad);
+            applyProto('glb:shell_cluster', false, castShad, () => {
+              const g = new THREE.Group();
+              for (let i = 0; i < 3; i++) {
+                const sh = models.environment.shell.clone(true);
+                sh.scale.setScalar(0.85 + (i % 2) * 0.2);
+                sh.position.set((i - 1) * 0.24, 0.01, (i % 2) * 0.18);
+                sh.rotation.y = i * 1.9;
+                g.add(sh);
+              }
+              return g;
+            });
           } else if (def.type === 'supply_crate') {
-            group.clear();
-            const crate = models.buildables.crateStorage.clone(true);
-            crate.scale.setScalar(0.92);
-            group.add(crate);
-            this.enableGroupShadows(group, castShad, castShad);
+            applyProto('glb:supply_crate', castShad, castShad, () => {
+              const g = new THREE.Group();
+              const crate = models.buildables.crateStorage.clone(true);
+              crate.scale.setScalar(0.92);
+              g.add(crate);
+              return g;
+            });
           } else if (def.type === 'crash_debris') {
-            group.clear();
-            const p = models.wreckage.panelDebris.clone(true);
-            p.scale.setScalar(0.68);
-            group.add(p);
-            const sc = models.wreckage.suitcase.clone(true);
-            sc.position.set(0.58, 0, 0.36);
-            sc.rotation.y = 0.85;
-            group.add(sc);
-            this.enableGroupShadows(group, castShad, castShad);
+            applyProto('glb:crash_debris', castShad, castShad, () => {
+              const g = new THREE.Group();
+              const p = models.wreckage.panelDebris.clone(true);
+              p.scale.setScalar(0.68);
+              g.add(p);
+              const sc = models.wreckage.suitcase.clone(true);
+              sc.position.set(0.58, 0, 0.36);
+              sc.rotation.y = 0.85;
+              g.add(sc);
+              return g;
+            });
           }
         }
 
@@ -1097,6 +1222,7 @@ export class SurvivalScene3D {
         }
         this.rebuildDynamicColliders();
         this.freezeStaticObject(this.crashSiteGroup);
+        for (const puff of this.crashSmokePuffs) puff.matrixAutoUpdate = true;
         this.freezeStaticObject(this.glbCliffsGroup);
       })
       .catch(() => {
@@ -1198,7 +1324,7 @@ export class SurvivalScene3D {
     for (const rec of this.nodeMeshes.values()) {
       const ny = this.getTerrainHeight(rec.def.x, rec.def.z);
       rec.def.y = ny;
-      rec.group.position.y = Math.max(0.08, ny);
+      rec.group.position.y = ny < -0.15 ? ny : Math.max(0.08, ny);
     }
     for (const rec of this.clueMeshes.values()) {
       rec.group.position.y = this.getTerrainHeight(rec.def.x, rec.def.z);
@@ -1218,6 +1344,8 @@ export class SurvivalScene3D {
     for (const st of this.structures3D.values()) {
       st.group.position.y = this.getTerrainHeight(st.data.x, st.data.z);
     }
+    this.foliageField?.resnapToTerrain((wx, wz) => this.getTerrainHeight(wx, wz));
+    this.storyProps3D?.resnapToTerrain((wx, wz) => this.getTerrainHeight(wx, wz));
     const groundAtPlayer = this.getTerrainHeight(this.playerPos.x, this.playerPos.z);
     this.playerFootY = groundAtPlayer;
     this.playerPos.y = groundAtPlayer + this.currentEyeHeight;
@@ -1450,6 +1578,7 @@ export class SurvivalScene3D {
 
   public setQuality(nextQuality: GraphicsQuality) {
     this.quality = nextQuality;
+    this.csmFrameCounter = 0;
     saveGraphicsQuality(nextQuality);
 
     const preset = GRAPHICS_PRESETS[nextQuality];
@@ -1518,7 +1647,7 @@ export class SurvivalScene3D {
         grade: preset.colorGrade,
         ssao: preset.ssao,
         smaa: preset.smaa,
-        dof: preset.dof,
+        dof: preset.dof && (this.photoMode || this.smoothUnderwaterFactor > 0.25),
         godRays: !this.isSoftwareGl && nextQuality !== 'low',
         godRayIntensity,
         godRaySamples:
@@ -1558,7 +1687,7 @@ export class SurvivalScene3D {
         }
         const bsR = mesh.geometry.boundingSphere?.radius ?? 1;
         const maxS = Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z);
-        mesh.castShadow = cast && bsR * maxS >= 0.55;
+        mesh.castShadow = cast && bsR * maxS >= GRAPHICS_TUNING.NODE_MIN_SHADOW_RADIUS;
         mesh.receiveShadow = receive;
         if (this.csm && !mat.userData.__csmSkip && !this.csm.shaders.has(mat)) {
           this.csm.setupMaterial(mat);
@@ -1612,8 +1741,8 @@ export class SurvivalScene3D {
         }
         const bsR = mesh.geometry.boundingSphere?.radius ?? 1;
         const maxS = Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z);
-        // Tiny ground twigs/stones (<0.55m) only receive shadows to avoid cluttering 3x CSM cascades
-        mesh.castShadow = bsR * maxS >= 0.55;
+        // Small ground twigs/stones/props only receive shadows to keep CSM cascades lean
+        mesh.castShadow = bsR * maxS >= GRAPHICS_TUNING.NODE_MIN_SHADOW_RADIUS;
         mesh.receiveShadow = true;
       }
     });
@@ -1740,6 +1869,7 @@ export class SurvivalScene3D {
   }
 
   public teleportToBossArena(phase: 1 | 2 | 3 = 1) {
+    this.csmFrameCounter = 0;
     this.sunriseClearOverride = false;
     this.isBlocking = false;
     this.isHoldingLmb = false;
@@ -1798,11 +1928,13 @@ export class SurvivalScene3D {
   }
 
   public teleportPlayerTo(x: number, z: number, yaw?: number) {
+    this.csmFrameCounter = 0;
     const ty = this.getTerrainHeight(x, z);
     this.playerFootY = ty;
     this.playerPos.set(x, ty + STANCE_TUNING.EYE_HEIGHT_STAND_M, z);
     this.velX = 0;
     this.velZ = 0;
+    this.updateSmallNodeDistanceCull();
     this.verticalVel = 0;
     this.isGrounded = true;
     this.stance = 'stand';
@@ -1874,6 +2006,10 @@ export class SurvivalScene3D {
 
   public notifyToolImpact(): void {
     this.fpIKRig?.notifyImpactHit();
+  }
+
+  public notifyWeaponFire(kickScale: number = 1.0): void {
+    this.fpIKRig?.notifyWeaponFire(kickScale);
   }
 
   public toggleInspectItem(): boolean {
@@ -1977,27 +2113,33 @@ export class SurvivalScene3D {
   public triggerPickupAnimation(
     worldPos?: THREE.Vector3,
     reach: 'ground' | 'waist' | 'bush' = 'ground',
-    nodeGroup?: THREE.Object3D
+    nodeGroupOrId?: THREE.Object3D | string
   ) {
     this.pickupAnimTimer = ANIMATION_TUNING.PICKUP_DURATION_SEC;
     this.pickupReachHeight = reach;
-    const clip: FPArmClipName =
-      reach === 'bush' ? 'PluckBush' : reach === 'waist' ? 'PickupWaist' : 'PickupGround';
-    this.fpClipController?.triggerOneShot(clip, ANIMATION_TUNING.PICKUP_DURATION_SEC);
 
     if (worldPos) {
+      const resolvedGroup =
+        typeof nodeGroupOrId === 'string'
+          ? this.nodeMeshes.get(nodeGroupOrId)?.group
+          : nodeGroupOrId;
       let flyMesh: THREE.Object3D;
-      if (nodeGroup && nodeGroup.children.length > 0) {
-        flyMesh = nodeGroup.children[0].clone(true);
-        flyMesh.scale.multiplyScalar(0.55);
+      let baseScale = 0.42;
+      let isFallback = false;
+      if (resolvedGroup && resolvedGroup.children.length > 0) {
+        flyMesh = resolvedGroup.children[0].clone(true);
+        flyMesh.visible = true;
+        baseScale = Math.min(0.62, Math.max(0.28, flyMesh.scale.x * 0.55));
+        flyMesh.scale.setScalar(baseScale);
       } else if (this.loadedGLBs?.rocks.small) {
         flyMesh = this.loadedGLBs.rocks.small.clone(true);
-        flyMesh.scale.setScalar(0.42);
+        baseScale = 0.42;
+        flyMesh.scale.setScalar(baseScale);
       } else {
-        flyMesh = new THREE.Mesh(
-          new THREE.DodecahedronGeometry(0.12, 0),
-          new THREE.MeshStandardMaterial({ color: 0xa8a29e, roughness: 0.8 })
-        );
+        this.fallbackPickupGeom ??= new THREE.DodecahedronGeometry(0.12, 0);
+        this.fallbackPickupMat ??= new THREE.MeshStandardMaterial({ color: 0xa8a29e, roughness: 0.8 });
+        flyMesh = new THREE.Mesh(this.fallbackPickupGeom, this.fallbackPickupMat);
+        isFallback = true;
       }
       flyMesh.position.copy(worldPos);
       this.scene.add(flyMesh);
@@ -2005,7 +2147,10 @@ export class SurvivalScene3D {
         mesh: flyMesh,
         startPos: worldPos.clone(),
         elapsed: 0,
-        duration: 0.44,
+        duration: ANIMATION_TUNING.PICKUP_DURATION_SEC * 0.86,
+        baseScale,
+        isFallback,
+        toLeftHand: Boolean(this.currentEquippedItemId),
       });
     }
   }
@@ -2122,7 +2267,8 @@ export class SurvivalScene3D {
       this.targetYaw = this.photoSavedCam.yaw;
       this.photoSavedCam = null;
       this.fullBodyController?.setShowHeadForPhotoMode(false);
-      if (this.fpIKRig) this.fpIKRig.root.visible = !inVoy;
+      const showDuringBossBoat = this.latestState?.boss.combatPhase === 'phase3_boat';
+      if (this.fpIKRig) this.fpIKRig.root.visible = !inVoy || showDuringBossBoat;
       this.toolRig.visible = !inVoy && !this.fpIKRig;
       this.offhandRig.visible = !inVoy && !this.fpIKRig;
     }
@@ -2231,6 +2377,17 @@ export class SurvivalScene3D {
       dz /= len;
     }
 
+    if (sound === 'blocked') {
+      this.nodeJiggles.set(nodeId, {
+        timer: 0,
+        dur: 0.24,
+        dirX: dx,
+        dirZ: dz,
+        amp: 0.014,
+      });
+      return;
+    }
+
     // Spring-damped shake on struck tree, bush, or plant
     this.grimeLevel = Math.min(1, this.grimeLevel + (sound === 'chop' || sound === 'mine' ? 0.12 : 0.05));
     this.worldLifeFx?.scatterBirds(this.playerPos);
@@ -2255,6 +2412,26 @@ export class SurvivalScene3D {
       rec.group.add(notch);
       notches.push(notch);
       this.chopNotches.set(nodeId, notches);
+    }
+
+    if (depleted) {
+      // Hide node & clear hover prompt immediately so destruction never lags behind React state sync
+      rec.available = false;
+      rec.group.visible = false;
+      rec.group.rotation.x = 0;
+      rec.group.rotation.z = 0;
+      this.nodeJiggles.delete(nodeId);
+      if (this.hoveredTarget?.nodeDef?.id === nodeId) {
+        this.hoveredTarget = null;
+      }
+      this.rebuildDynamicCollidersIfDirty();
+    }
+
+    if (!isTree && depleted && sound !== 'pickup') {
+      this.spawnHarvestDebris(
+        sound === 'mine' ? 'mine' : 'chop',
+        _toTarget.set(rec.def.x, rec.def.y + 0.45, rec.def.z)
+      );
     }
 
     if (isTree && depleted) {
@@ -2381,7 +2558,132 @@ export class SurvivalScene3D {
     this.fallingTrees = remaining;
   }
 
+  private isSmallNodeDistCulled(def: GatherNodeDef): boolean {
+    const t = def.type;
+    if (
+      t !== 'loose_stone' &&
+      t !== 'shell_cluster' &&
+      t !== 'herb_patch' &&
+      t !== 'fibre_bush' &&
+      t !== 'berry_bush' &&
+      t !== 'driftwood' &&
+      t !== 'coconut'
+    ) {
+      return false;
+    }
+    const dx = def.x - this.playerPos.x;
+    const dz = def.z - this.playerPos.z;
+    return dx * dx + dz * dz > GRAPHICS_TUNING.SMALL_NODE_CULL_DIST_M * GRAPHICS_TUNING.SMALL_NODE_CULL_DIST_M;
+  }
+
+  private applyVoyageCulling(inVoyage: boolean): void {
+    const showIslandDetails = !inVoyage;
+    if (this.crashSiteGroup) this.crashSiteGroup.visible = showIslandDetails;
+    if (this.springGroup) this.springGroup.visible = showIslandDetails;
+    if (this.glbCliffsGroup) this.glbCliffsGroup.visible = showIslandDetails;
+    if (this.landmarks) {
+      this.landmarks.groups.campGroup.visible = showIslandDetails;
+      this.landmarks.groups.tailGroup.visible = showIslandDetails;
+      this.landmarks.groups.caveGroup.visible = showIslandDetails;
+      this.landmarks.groups.ruinsGroup.visible = showIslandDetails;
+      this.landmarks.groups.stationGroup.visible = showIslandDetails;
+      for (const rec of this.landmarks.stationSystems.values()) {
+        rec.group.visible = showIslandDetails;
+      }
+      for (const l of this.landmarks.caveCrystalLights) {
+        l.visible = showIslandDetails;
+      }
+    }
+    this.storyProps3D?.setVoyageMode(inVoyage);
+
+    if (inVoyage) {
+      for (const rec of this.nodeMeshes.values()) rec.group.visible = false;
+      for (const rec of this.gateMeshes.values()) rec.group.visible = false;
+      for (const rec of this.clueMeshes.values()) rec.group.visible = false;
+      for (const rec of this.campfires3D.values()) rec.group.visible = false;
+      for (const rec of this.shelters3D.values()) rec.group.visible = false;
+      for (const rec of this.structures3D.values()) rec.group.visible = false;
+      this.wasVoyageCulled = true;
+    } else if (this.wasVoyageCulled) {
+      this.wasVoyageCulled = false;
+      const st = this.latestState;
+      const unlocked = new Set(st?.unlockedGates ?? []);
+      const foundClues = new Set(st?.cluesFound ?? []);
+      for (const [id, rec] of this.gateMeshes.entries()) {
+        rec.group.visible = !unlocked.has(id);
+      }
+      for (const rec of this.clueMeshes.values()) {
+        rec.group.visible = true;
+        if (rec.beacon) rec.beacon.visible = !foundClues.has(rec.def.id);
+      }
+      for (const rec of this.nodeMeshes.values()) {
+        rec.group.visible = (rec.available ?? true) && !this.isSmallNodeDistCulled(rec.def);
+      }
+      for (const rec of this.campfires3D.values()) rec.group.visible = true;
+      for (const rec of this.shelters3D.values()) rec.group.visible = true;
+      for (const rec of this.structures3D.values()) rec.group.visible = true;
+    }
+  }
+
+  private updateSmallNodeDistanceCull() {
+    if (this.isOnOceanBoat()) return;
+    for (const [, rec] of this.nodeMeshes.entries()) {
+      if (rec.available === false) continue;
+      const t = rec.def.type;
+      if (
+        t !== 'loose_stone' &&
+        t !== 'shell_cluster' &&
+        t !== 'herb_patch' &&
+        t !== 'fibre_bush' &&
+        t !== 'berry_bush' &&
+        t !== 'driftwood' &&
+        t !== 'coconut'
+      ) {
+        continue;
+      }
+      const nextVis = !this.isSmallNodeDistCulled(rec.def);
+      if (rec.group.visible !== nextVis) {
+        rec.group.visible = nextVis;
+      }
+    }
+  }
+
+  private computeDynamicColliderSignature(): string {
+    let visNodesHash = 0;
+    let visNodeCount = 0;
+    let idx = 1;
+    for (const [, rec] of this.nodeMeshes.entries()) {
+      const t = rec.def.type;
+      const isCollidable =
+        t === 'palm_tree' ||
+        t === 'resin_tree' ||
+        t === 'boulder' ||
+        t === 'copper_vein' ||
+        t === 'iron_vein' ||
+        t === 'flint_nodule' ||
+        t === 'supply_crate' ||
+        t === 'fuel_drum' ||
+        t === 'tech_wreck' ||
+        t === 'crash_debris';
+      if (isCollidable && rec.group.visible) {
+        visNodeCount += 1;
+        visNodesHash = (visNodesHash + idx * 131) & 0x7fffffff;
+      }
+      idx += 1;
+    }
+    const inPrison = Boolean(this.latestState?.prison.inPrison);
+    return `${this.staticGLBColliders.length}:${this.worldBoulderColliders.length}:${visNodeCount}:${visNodesHash}:${this.campfires3D.size}:${this.shelters3D.size}:${this.structures3D.size}:${inPrison ? 1 : 0}`;
+  }
+
+  private rebuildDynamicCollidersIfDirty() {
+    const sig = this.computeDynamicColliderSignature();
+    if (sig !== this.lastColliderSignature) {
+      this.rebuildDynamicColliders();
+    }
+  }
+
   private rebuildDynamicColliders() {
+    this.lastColliderSignature = this.computeDynamicColliderSignature();
     const cols: WorldCollider[] = [...this.staticGLBColliders, ...this.worldBoulderColliders];
 
     for (const [id, rec] of this.nodeMeshes.entries()) {
@@ -2550,7 +2852,8 @@ export class SurvivalScene3D {
     // Sync node visibility against state.nodes and clock.totalHours
     for (const [id, rec] of this.nodeMeshes.entries()) {
       const available = isNodeAvailable(id, state.nodes, state.clock.totalHours);
-      rec.group.visible = available;
+      rec.available = available;
+      rec.group.visible = available && !this.isSmallNodeDistCulled(rec.def);
       if (available) {
         const stump = this.chopStumps.get(id);
         if (stump) {
@@ -2569,7 +2872,7 @@ export class SurvivalScene3D {
     this.syncCampfires(state.campfires ?? []);
     this.syncShelters(state.shelters ?? []);
     this.syncStructures(state.structures ?? []);
-    this.rebuildDynamicColliders();
+    this.rebuildDynamicCollidersIfDirty();
     this.wildlife3D.sync(state.wildlife ?? [], (wx, wz) => this.getTerrainHeight(wx, wz));
     if (this.landmarks && state.stationRepairs) {
       syncStationSystemsVisuals(this.landmarks.stationSystems, state.stationRepairs);
@@ -2612,6 +2915,12 @@ export class SurvivalScene3D {
       if (rec.beacon) {
         rec.beacon.visible = !foundClues.has(id);
       }
+    }
+
+    if (inVoyage) {
+      this.applyVoyageCulling(true);
+    } else if (this.wasVoyageCulled) {
+      this.applyVoyageCulling(false);
     }
 
     // If player respawned or loaded a new game, snap position
@@ -2869,19 +3178,24 @@ export class SurvivalScene3D {
   }
 
   private initRainSystem() {
-    const dropCount = 450;
+    const dropCount = GRAPHICS_TUNING.RAIN_DROP_COUNT;
     const positions = new Float32Array(dropCount * 3);
     for (let i = 0; i < dropCount; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 44;
-      positions[i * 3 + 1] = Math.random() * 22;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 44;
+      randomizeRainDrop(
+        positions,
+        i,
+        GRAPHICS_TUNING.RAIN_AREA_HALF_EXTENT,
+        GRAPHICS_TUNING.RAIN_NEAR_EXCLUSION_RADIUS,
+        GRAPHICS_TUNING.RAIN_HEIGHT_RANGE,
+        true
+      );
     }
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     this.rainMat = new THREE.PointsMaterial({
       color: 0xbad7f2,
       map: createRainStreakTexture(32),
-      size: 0.34,
+      size: GRAPHICS_TUNING.RAIN_SPRITE_SIZE,
       transparent: true,
       opacity: 0,
       depthWrite: false,
@@ -3044,6 +3358,7 @@ export class SurvivalScene3D {
     const crashY = this.getTerrainHeight(crashX, crashZ);
     crashGroup.name = 'crash_site_group';
     crashGroup.position.set(crashX, crashY, crashZ);
+    mergeStaticMeshesByMaterial(crashGroup, new Set(this.crashSmokePuffs));
     this.scene.add(crashGroup);
     this.crashSiteGroup = crashGroup;
 
@@ -3228,13 +3543,31 @@ export class SurvivalScene3D {
     }
   }
 
+  private cloneCachedNodePrototype(
+    cacheKey: string,
+    factory: () => THREE.Group,
+    shadowOpts?: { cast: boolean; receive: boolean }
+  ): THREE.Group {
+    let proto = this.gatherNodeProtoCache.get(cacheKey);
+    if (!proto) {
+      proto = factory();
+      mergeStaticMeshesByMaterial(proto);
+      if (shadowOpts) {
+        this.enableGroupShadows(proto, shadowOpts.cast, shadowOpts.receive);
+      }
+      this.gatherNodeProtoCache.set(cacheKey, proto);
+    }
+    return proto.clone(true);
+  }
+
   private buildGatherNodeMesh(type: GatherNodeDef['type']): THREE.Group {
-    const extra = buildExtraGatherNodeMesh(type);
-    if (extra) return extra;
+    return this.cloneCachedNodePrototype(`proc:${type}`, () => {
+      const extra = buildExtraGatherNodeMesh(type);
+      if (extra) return extra;
 
-    const group = new THREE.Group();
+      const group = new THREE.Group();
 
-    switch (type) {
+      switch (type) {
       case 'palm_tree': {
         const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4c35, roughness: 0.88 });
         trunkMat.userData.pbrKind = 'bark';
@@ -3440,24 +3773,25 @@ export class SurvivalScene3D {
         break;
       }
 
-      case 'supply_crate': {
-        const caseMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.55 });
-        const strapMat = new THREE.MeshStandardMaterial({
-          color: 0x1e293b,
-          roughness: 0.4,
-          metalness: 0.7,
-        });
-        const box = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.55, 0.68), caseMat);
-        box.position.y = 0.28;
-        group.add(box);
-        const strap = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.58, 0.12), strapMat);
-        strap.position.y = 0.28;
-        group.add(strap);
-        break;
+        case 'supply_crate': {
+          const caseMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.55 });
+          const strapMat = new THREE.MeshStandardMaterial({
+            color: 0x1e293b,
+            roughness: 0.4,
+            metalness: 0.7,
+          });
+          const box = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.55, 0.68), caseMat);
+          box.position.y = 0.28;
+          group.add(box);
+          const strap = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.58, 0.12), strapMat);
+          strap.position.y = 0.28;
+          group.add(strap);
+          break;
+        }
       }
-    }
 
-    return group;
+      return group;
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -4102,13 +4436,27 @@ export class SurvivalScene3D {
   // PARTICLES & INTERACTION RAYCASTING
   // ---------------------------------------------------------------------------
 
-  public spawnHarvestDebris(soundType: 'chop' | 'mine' | 'pickup', worldPos: THREE.Vector3) {
-    if (soundType === 'pickup') {
-      const dy = worldPos.y - (this.playerFootY + this.currentEyeHeight);
-      const reach: 'ground' | 'waist' | 'bush' =
-        dy > -0.45 ? 'bush' : dy > -1.05 ? 'waist' : 'ground';
-      this.triggerPickupAnimation(worldPos, reach);
+  private ensureParticlePools() {
+    if (!this.chipGeoms) {
+      this.chipGeoms = {
+        harvest: new THREE.DodecahedronGeometry(0.065, 0),
+        stepDust: new THREE.DodecahedronGeometry(0.048, 0),
+        stepWater: new THREE.DodecahedronGeometry(0.055, 0),
+      };
     }
+    if (!this.chipMats) {
+      this.chipMats = {
+        chop: new THREE.MeshLambertMaterial({ color: 0x9c6631 }),
+        mine: new THREE.MeshLambertMaterial({ color: 0x64748b }),
+        pickup: new THREE.MeshLambertMaterial({ color: 0x4d7c0f }),
+        dust: new THREE.MeshLambertMaterial({ color: 0xb8a382 }),
+        splash: new THREE.MeshLambertMaterial({ color: 0xbae6fd }),
+      };
+    }
+  }
+
+  public spawnHarvestDebris(soundType: 'chop' | 'mine' | 'pickup', worldPos: THREE.Vector3) {
+    this.ensureParticlePools();
 
     if (this.loadedGLBs?.flipbooks) {
       const fb = this.loadedGLBs.flipbooks;
@@ -4120,14 +4468,16 @@ export class SurvivalScene3D {
             : fb.sandPuff;
       const tex = baseTex.clone();
       tex.needsUpdate = true;
+      this.harvestPlaneGeom ??= new THREE.PlaneGeometry(0.65, 0.65);
       const pMat = new THREE.MeshBasicMaterial({
         map: tex,
         transparent: true,
         depthWrite: false,
         side: THREE.DoubleSide,
       });
-      const pMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.65, 0.65), pMat);
-      pMesh.position.copy(worldPos).add(new THREE.Vector3(0, 0.25, 0));
+      const pMesh = new THREE.Mesh(this.harvestPlaneGeom, pMat);
+      pMesh.position.copy(worldPos);
+      pMesh.position.y += 0.25;
       pMesh.lookAt(this.camera.position);
       this.scene.add(pMesh);
       this.particles.push({
@@ -4137,18 +4487,23 @@ export class SurvivalScene3D {
         maxLifetime: 0.52,
         gravity: 0,
         scaleCurve: 'smoke',
+        sharedGeom: true,
         flipbookTex: tex,
         flipbookFps: 28,
         billboard: true,
       });
     }
 
-    const color =
-      soundType === 'mine' ? 0x64748b : soundType === 'chop' ? 0x9c6631 : 0x4d7c0f;
-    const geom = new THREE.DodecahedronGeometry(0.065, 0);
-    const mat = new THREE.MeshLambertMaterial({ color });
+    const geom = this.chipGeoms!.harvest;
+    const mat =
+      soundType === 'mine'
+        ? this.chipMats!.mine
+        : soundType === 'chop'
+          ? this.chipMats!.chop
+          : this.chipMats!.pickup;
+    const count = soundType === 'pickup' ? 3 : 5;
 
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < count; i++) {
       const p = new THREE.Mesh(geom, mat);
       p.position.copy(worldPos);
       this.scene.add(p);
@@ -4161,11 +4516,15 @@ export class SurvivalScene3D {
         ),
         lifetime: 0,
         maxLifetime: 0.48 + Math.random() * 0.28,
+        sharedGeom: true,
+        sharedMat: true,
       });
     }
   }
 
   private spawnStepDust(isWater: boolean) {
+    this.ensureParticlePools();
+
     if (this.loadedGLBs?.flipbooks) {
       const fb = this.loadedGLBs.flipbooks;
       const baseTex = isWater
@@ -4175,6 +4534,7 @@ export class SurvivalScene3D {
           : fb.dustPuff;
       const tex = baseTex.clone();
       tex.needsUpdate = true;
+      this.stepPlaneGeom ??= new THREE.PlaneGeometry(0.45, 0.45);
       const pMat = new THREE.MeshBasicMaterial({
         map: tex,
         transparent: true,
@@ -4182,7 +4542,7 @@ export class SurvivalScene3D {
         depthWrite: false,
         side: THREE.DoubleSide,
       });
-      const pMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 0.45), pMat);
+      const pMesh = new THREE.Mesh(this.stepPlaneGeom, pMat);
       pMesh.position.set(
         this.playerPos.x + (Math.random() - 0.5) * 0.25,
         this.playerFootY + 0.16,
@@ -4197,6 +4557,7 @@ export class SurvivalScene3D {
         maxLifetime: 0.42,
         gravity: 0,
         scaleCurve: 'smoke',
+        sharedGeom: true,
         flipbookTex: tex,
         flipbookFps: 30,
         billboard: true,
@@ -4204,8 +4565,8 @@ export class SurvivalScene3D {
       return;
     }
 
-    const geom = new THREE.DodecahedronGeometry(isWater ? 0.055 : 0.048, 0);
-    const mat = new THREE.MeshLambertMaterial({ color: isWater ? 0xbae6fd : 0xb8a382 });
+    const geom = isWater ? this.chipGeoms!.stepWater : this.chipGeoms!.stepDust;
+    const mat = isWater ? this.chipMats!.splash : this.chipMats!.dust;
     const count = isWater ? 4 : 2;
     for (let i = 0; i < count; i++) {
       const p = new THREE.Mesh(geom, mat);
@@ -4224,6 +4585,8 @@ export class SurvivalScene3D {
         ),
         lifetime: 0,
         maxLifetime: 0.32 + Math.random() * 0.16,
+        sharedGeom: true,
+        sharedMat: true,
       });
     }
   }
@@ -4785,7 +5148,7 @@ export class SurvivalScene3D {
           this.hoveredTarget = {
             kind: 'campfire',
             label: 'Lit Stone Campfire',
-            prompt: '[E / C] Boil Water & Roast Food',
+            prompt: '[E / Click] Boil Water & Roast Food',
             subtext: 'Warmth Aura Active (+18°C)',
             canInteract: true,
             campfireId: fire.data.id,
@@ -4795,9 +5158,9 @@ export class SurvivalScene3D {
       }
     }
 
-    // 4. Check gathering nodes in reach and look cone
+    // 4. Check gathering nodes in reach and look cone (using node-appropriate aim height & crosshair score)
     let bestNode: GatherNodeDef | null = null;
-    let bestDist = WORLD.INTERACT_RANGE;
+    let bestScore = -Infinity;
 
     for (const [id, rec] of this.nodeMeshes.entries()) {
       if (!rec.group.visible) continue;
@@ -4805,14 +5168,26 @@ export class SurvivalScene3D {
 
       const nodePos = rec.group.position;
       const dist = this.playerPos.distanceTo(nodePos);
-      if (dist <= bestDist) {
+      if (dist <= WORLD.INTERACT_RANGE) {
+        const t = rec.def.type;
+        const aimYOffset =
+          t === 'palm_tree' || t === 'resin_tree'
+            ? 1.05
+            : t === 'boulder' || t === 'copper_vein' || t === 'iron_vein' || t === 'supply_crate' || t === 'fuel_drum' || t === 'tech_wreck'
+              ? 0.48
+              : 0.18;
         _toTarget
-          .set(nodePos.x, nodePos.y + 0.6, nodePos.z)
+          .set(nodePos.x, nodePos.y + aimYOffset, nodePos.z)
           .sub(this.camera.position)
           .normalize();
-        if (_camDir.dot(_toTarget) > 0.74) {
-          bestDist = dist;
-          bestNode = rec.def;
+        const dot = _camDir.dot(_toTarget);
+        const minDot = aimYOffset <= 0.25 ? 0.72 : 0.74;
+        if (dot > minDot) {
+          const score = dot * 2.2 - dist * 0.14;
+          if (score > bestScore) {
+            bestScore = score;
+            bestNode = rec.def;
+          }
         }
       }
     }
@@ -5025,6 +5400,9 @@ export class SurvivalScene3D {
       this.isSprinting = false;
       this.isSwimming = false;
       this.isWading = false;
+      this.isGrounded = true;
+      this.verticalVel = 0;
+      this.lastEuphoriaOut = null;
       this.velX = 0;
       this.velZ = 0;
       return;
@@ -5552,21 +5930,21 @@ export class SurvivalScene3D {
     }
     this.equipAnimTimer = Math.max(0, this.equipAnimTimer - delta * 4.5);
 
-    // Update flying 3D item pickup clones arcing smoothly into the left hand
+    // Update flying 3D item pickup clones arcing smoothly into the active catching hand
     if (this.flyingPickups.length > 0) {
-      const handWorldTarget = new THREE.Vector3(-0.22, -0.26, -0.45).applyMatrix4(
-        this.camera.matrixWorld
-      );
       const keepPickups: typeof this.flyingPickups = [];
       for (const fp of this.flyingPickups) {
         fp.elapsed += delta;
         const t = Math.min(1, fp.elapsed / fp.duration);
-        const ease = t * t * (3 - 2 * t);
-        fp.mesh.position.lerpVectors(fp.startPos, handWorldTarget, ease);
-        fp.mesh.position.y += Math.sin(t * Math.PI) * 0.22;
+        const ease = 1 - Math.pow(1 - t, 3);
+        _handPickupTarget
+          .set(fp.toLeftHand ? -0.14 : 0.14, -0.26, -0.43)
+          .applyMatrix4(this.camera.matrixWorld);
+        fp.mesh.position.lerpVectors(fp.startPos, _handPickupTarget, ease);
+        fp.mesh.position.y += Math.sin(t * Math.PI) * 0.18;
         fp.mesh.rotation.y += delta * 6.5;
-        const shrink = t < 0.7 ? 1.0 : Math.max(0.05, 1.0 - (t - 0.7) / 0.3);
-        fp.mesh.scale.setScalar(0.42 * shrink);
+        const shrink = t < 0.68 ? 1.0 : Math.max(0.05, 1.0 - (t - 0.68) / 0.32);
+        fp.mesh.scale.setScalar(fp.baseScale * shrink);
         if (t < 1) {
           keepPickups.push(fp);
         } else {
@@ -5740,7 +6118,8 @@ export class SurvivalScene3D {
     }
 
     if (this.fpIKRig) {
-      this.fpIKRig.root.visible = !this.photoMode && !inVoy;
+      const showDuringBossBoat = this.latestState?.boss.combatPhase === 'phase3_boat';
+      this.fpIKRig.root.visible = !this.photoMode && (!inVoy || showDuringBossBoat);
       // Track wetness, grime, dried blood & tool durability wear
       const hp = this.latestState?.needs.health ?? 100;
       if (hp < this.lastKnownHp - 1) {
@@ -5976,55 +6355,82 @@ export class SurvivalScene3D {
       );
     }
 
-    const stormWeight = weather.kind === 'storm' ? 1 : weather.rain * 0.65;
+    const safeDt = Math.min(0.05, Math.max(0.0005, delta));
+    const stormTarget = weather.kind === 'storm' ? 1 : weather.rain * 0.65;
+    const underwaterNow = this.camera.position.y < this.currentWaterLevel + 0.04;
+    const underwaterTarget = underwaterNow ? 1 : 0;
 
-    // Earthy survival sky colors: golden dawn/sunset, crisp coastal day, cold blue night
-    const dayHorizon = new THREE.Color(weather.rain > 0 ? 0x5c7286 : 0x74badb);
-    const dayZenith = new THREE.Color(weather.rain > 0 ? 0x354759 : 0x1b589c);
-    const goldenHorizon = new THREE.Color(0xe6884e);
-    const goldenZenith = new THREE.Color(0x284770);
-    const nightHorizon = new THREE.Color(0x0b1a33);
-    const nightZenith = new THREE.Color(0x030816);
-
-    const skyColor = new THREE.Color();
-    const zenithColor = new THREE.Color();
-    let nightFactor = 0;
-
-    if (sunElev > 0.22) {
-      const t = THREE.MathUtils.clamp((sunElev - 0.22) / 0.45, 0, 1);
-      const st = THREE.MathUtils.smoothstep(t, 0, 1);
-      skyColor.lerpColors(goldenHorizon, dayHorizon, st);
-      zenithColor.lerpColors(goldenZenith, dayZenith, st);
-      this.sunLight.intensity =
-        (WORLD_VISUAL_TUNING.SUN_KEY_INTENSITY_DAY - 0.18 + t * 0.28) *
-        (1 - weather.rain * 0.34);
-      this.sunLight.color.setHex(0xfff0d4);
-      this.ambientLight.intensity = 0.22 + t * 0.06;
-      this.hemiLight.intensity = GRAPHICS_TUNING.AMBIENT_HEMI_INTENSITY_DAY - stormWeight * 0.14;
-      this.hemiLight.color.setHex(weather.rain > 0 ? 0x90a4b8 : 0xa5d5ed);
-      this.hemiLight.groundColor.setHex(0x645438);
-    } else if (sunElev > -0.18) {
-      const t = THREE.MathUtils.clamp((sunElev + 0.18) / 0.4, 0, 1);
-      skyColor.lerpColors(nightHorizon, goldenHorizon, t);
-      zenithColor.lerpColors(nightZenith, goldenZenith, t);
-      this.sunLight.intensity = 0.38 + t * 0.72;
-      this.sunLight.color.setHex(0xffb464);
-      this.ambientLight.intensity = 0.18 + t * 0.06;
-      this.hemiLight.intensity = GRAPHICS_TUNING.AMBIENT_HEMI_INTENSITY_NIGHT + t * 0.22;
-      this.hemiLight.color.setHex(0xdc9868);
-      this.hemiLight.groundColor.setHex(0x4a402a);
-      nightFactor = 1 - t;
+    if (!this.fogInitialized) {
+      this.smoothRainAtmo = weather.rain;
+      this.smoothStormAtmo = stormTarget;
+      this.smoothUnderwaterFactor = underwaterTarget;
     } else {
-      skyColor.copy(nightHorizon);
-      zenithColor.copy(nightZenith);
-      this.sunLight.intensity = 0.28;
-      this.sunLight.color.setHex(0x6088c2);
-      this.ambientLight.intensity = 0.19;
-      this.hemiLight.intensity = GRAPHICS_TUNING.AMBIENT_HEMI_INTENSITY_NIGHT;
-      this.hemiLight.color.setHex(0x223862);
-      this.hemiLight.groundColor.setHex(0x121d30);
-      nightFactor = 1;
+      this.smoothRainAtmo = THREE.MathUtils.damp(
+        this.smoothRainAtmo,
+        weather.rain,
+        GRAPHICS_TUNING.WEATHER_ATMOSPHERE_DAMP_SPEED,
+        safeDt
+      );
+      this.smoothStormAtmo = THREE.MathUtils.damp(
+        this.smoothStormAtmo,
+        stormTarget,
+        GRAPHICS_TUNING.WEATHER_ATMOSPHERE_DAMP_SPEED,
+        safeDt
+      );
+      this.smoothUnderwaterFactor = THREE.MathUtils.damp(
+        this.smoothUnderwaterFactor,
+        underwaterTarget,
+        GRAPHICS_TUNING.UNDERWATER_TRANSITION_SPEED,
+        safeDt
+      );
     }
+    const rainBlend = this.smoothRainAtmo;
+    const stormWeight = this.smoothStormAtmo;
+
+    // Continuous sunlit / golden dusk / night sky and light curves (no jumps across thresholds)
+    const rainSkyTint = Math.min(1, rainBlend * 1.35);
+    _dayHorizonCol.lerpColors(_clearHorizonCol, _rainHorizonCol, rainSkyTint);
+    _dayZenithCol.lerpColors(_clearZenithCol, _rainZenithCol, rainSkyTint);
+
+    const dayW = THREE.MathUtils.smoothstep(sunElev, 0.08, 0.56);
+    const twilightW = THREE.MathUtils.smoothstep(sunElev, -0.22, 0.16) * (1 - dayW);
+    const nightW = Math.max(0, 1 - dayW - twilightW);
+    const nightFactor = nightW + twilightW * 0.25;
+
+    blendColors3(_targetSkyCol, _dayHorizonCol, dayW, _goldenHorizonCol, twilightW, _nightHorizonCol, nightW);
+    blendColors3(_targetZenithCol, _dayZenithCol, dayW, _goldenZenithCol, twilightW, _nightZenithCol, nightW);
+    blendColors3(_targetSunCol, _sunDayCol, dayW, _sunDuskCol, twilightW, _sunNightCol, nightW);
+
+    if (stormWeight > 0.002) {
+      const stormSlateAmount = stormWeight * GRAPHICS_TUNING.STORM_FOG_SLATE_BLEND * (1 - nightW * 0.55);
+      _stormFogTargetCol.copy(_stormFogSlateCol).lerp(_nightHorizonCol, nightW * 0.78);
+      _targetSkyCol.lerp(_stormFogTargetCol, stormSlateAmount);
+      _targetZenithCol.lerp(_stormFogTargetCol, stormSlateAmount * 0.55);
+      _targetSunCol.lerp(_stormFogTargetCol, stormSlateAmount * 0.42);
+    }
+
+    const sunIntensityDay =
+      (WORLD_VISUAL_TUNING.SUN_KEY_INTENSITY_DAY - 0.12 + dayW * 0.22) * (1 - rainBlend * 0.34);
+    let targetSunIntensity =
+      sunIntensityDay * dayW + 0.88 * twilightW + 0.28 * nightW;
+
+    // Recompute rain-tinted day hemi color cleanly and blend continuously across day/twilight/night
+    const hemiR = THREE.MathUtils.lerp(0xa5 / 255, 0x90 / 255, rainSkyTint);
+    const hemiG = THREE.MathUtils.lerp(0xd5 / 255, 0xa4 / 255, rainSkyTint);
+    const hemiB = THREE.MathUtils.lerp(0xed / 255, 0xb8 / 255, rainSkyTint);
+    _targetHemiCol.setRGB(
+      hemiR * dayW + _duskHemiCol.r * twilightW + _nightHemiCol.r * nightW,
+      hemiG * dayW + _duskHemiCol.g * twilightW + _nightHemiCol.g * nightW,
+      hemiB * dayW + _duskHemiCol.b * twilightW + _nightHemiCol.b * nightW
+    );
+
+    blendColors3(_targetGroundCol, _dayGroundCol, dayW, _duskGroundCol, twilightW, _nightGroundCol, nightW);
+
+    let targetAmbIntensity = 0.26 * dayW + 0.22 * twilightW + 0.19 * nightW;
+    const targetHemiIntensity =
+      (GRAPHICS_TUNING.AMBIENT_HEMI_INTENSITY_DAY - stormWeight * 0.14) * dayW +
+      (GRAPHICS_TUNING.AMBIENT_HEMI_INTENSITY_NIGHT + 0.18) * twilightW +
+      GRAPHICS_TUNING.AMBIENT_HEMI_INTENSITY_NIGHT * nightW;
 
     // Palm breeze sway, cavern gloom near Obsidian Caves, & Stage 7 atmospheric mist/shafts/fireflies/lightning
     const tSec = nowMs * 0.001;
@@ -6047,8 +6453,8 @@ export class SurvivalScene3D {
         : 0
     );
     if (lightningFlash > 0.02) {
-      this.sunLight.intensity += lightningFlash * 1.45;
-      skyColor.lerp(new THREE.Color(0xcbd5e1), lightningFlash * 0.35);
+      targetSunIntensity += lightningFlash * 1.45;
+      _targetSkyCol.lerp(_lightningTintCol, Math.min(1, lightningFlash * 0.35));
       if (lightningFlash > 0.85 && nowMs - this.lastThunderSoundAt > 2500) {
         this.lastThunderSoundAt = nowMs;
         this.onThunderStrike?.();
@@ -6059,24 +6465,96 @@ export class SurvivalScene3D {
       this.playerPos.x - WORLD.CAVE_GROTTO_POS.x,
       this.playerPos.z - WORLD.CAVE_GROTTO_POS.z
     );
-    const caveFactor = inVoyage ? 0 : THREE.MathUtils.clamp(1 - (caveDist - 8) / 14, 0, 0.72);
-    if (caveFactor > 0.02) {
-      skyColor.lerp(new THREE.Color(0x0b1322), caveFactor);
-      zenithColor.lerp(new THREE.Color(0x050911), caveFactor);
-      this.sunLight.intensity *= 1 - caveFactor * 0.75;
-      this.ambientLight.intensity *= 1 - caveFactor * 0.45;
+    const rawCaveFactor = inVoyage ? 0 : THREE.MathUtils.clamp(1 - (caveDist - 8) / 14, 0, 0.72);
+    this.smoothCaveFactor = !this.fogInitialized
+      ? rawCaveFactor
+      : THREE.MathUtils.damp(this.smoothCaveFactor, rawCaveFactor, 4.5, safeDt);
+    const caveFactor = this.smoothCaveFactor;
+    if (caveFactor > 0.005) {
+      _targetSkyCol.lerp(_caveSkyCol, caveFactor);
+      _targetZenithCol.lerp(_caveZenCol, caveFactor);
+      targetSunIntensity *= 1 - caveFactor * 0.75;
+      targetAmbIntensity *= 1 - caveFactor * 0.45;
     }
 
-    this.scene.background = skyColor;
+    const targetDensitySurface =
+      THREE.MathUtils.lerp(
+        GRAPHICS_TUNING.BASE_FOG_DENSITY,
+        GRAPHICS_TUNING.STORM_FOG_DENSITY,
+        Math.max(rainBlend, stormWeight)
+      ) +
+      caveFactor * 0.015;
+    const targetDensity = THREE.MathUtils.lerp(
+      targetDensitySurface,
+      GRAPHICS_TUNING.UNDERWATER_FOG_DENSITY,
+      this.smoothUnderwaterFactor
+    );
+    if (this.smoothUnderwaterFactor > 0.002) {
+      _targetSkyCol.lerp(_underwaterFogCol, this.smoothUnderwaterFactor * 0.82);
+    }
+
+    if (!this.fogInitialized) {
+      this.smoothFogColor.copy(_targetSkyCol);
+      this.smoothZenithColor.copy(_targetZenithCol);
+      this.smoothFogDensity = targetDensity;
+      this.sunLight.color.copy(_targetSunCol);
+      this.sunLight.intensity = targetSunIntensity;
+      this.ambientLight.intensity = targetAmbIntensity;
+      this.hemiLight.color.copy(_targetHemiCol);
+      this.hemiLight.groundColor.copy(_targetGroundCol);
+      this.hemiLight.intensity = targetHemiIntensity;
+      this.fogInitialized = true;
+    } else {
+      const colBlend = 1 - Math.exp(-GRAPHICS_TUNING.FOG_COLOR_DAMP_SPEED * safeDt);
+      const uwBoost = this.smoothUnderwaterFactor > 0.01 || underwaterNow ? 1 - Math.exp(-GRAPHICS_TUNING.UNDERWATER_TRANSITION_SPEED * safeDt) : 0;
+      const effectiveColBlend = Math.max(colBlend, uwBoost);
+      this.smoothFogColor.lerp(_targetSkyCol, effectiveColBlend);
+      this.smoothZenithColor.lerp(_targetZenithCol, colBlend);
+      const densRate =
+        this.smoothUnderwaterFactor > 0.01 || underwaterNow
+          ? GRAPHICS_TUNING.UNDERWATER_TRANSITION_SPEED
+          : GRAPHICS_TUNING.FOG_DENSITY_DAMP_SPEED;
+      this.smoothFogDensity = THREE.MathUtils.damp(
+        this.smoothFogDensity,
+        targetDensity,
+        densRate,
+        safeDt
+      );
+
+      this.sunLight.color.lerp(_targetSunCol, colBlend);
+      this.sunLight.intensity = THREE.MathUtils.damp(
+        this.sunLight.intensity,
+        targetSunIntensity,
+        5.5,
+        safeDt
+      );
+      this.ambientLight.intensity = THREE.MathUtils.damp(
+        this.ambientLight.intensity,
+        targetAmbIntensity,
+        5.5,
+        safeDt
+      );
+      this.hemiLight.color.lerp(_targetHemiCol, colBlend);
+      this.hemiLight.groundColor.lerp(_targetGroundCol, colBlend);
+      this.hemiLight.intensity = THREE.MathUtils.damp(
+        this.hemiLight.intensity,
+        targetHemiIntensity,
+        5.5,
+        safeDt
+      );
+    }
+
+    const skyColor = this.smoothFogColor;
+    const zenithColor = this.smoothZenithColor;
+
+    if (this.scene.background instanceof THREE.Color) {
+      this.scene.background.copy(skyColor);
+    } else {
+      this.scene.background = skyColor;
+    }
     if (this.scene.fog instanceof THREE.FogExp2) {
       this.scene.fog.color.copy(skyColor);
-      this.scene.fog.density =
-        THREE.MathUtils.lerp(
-          GRAPHICS_TUNING.BASE_FOG_DENSITY,
-          GRAPHICS_TUNING.STORM_FOG_DENSITY,
-          Math.max(weather.rain, stormWeight)
-        ) +
-        caveFactor * 0.015;
+      this.scene.fog.density = this.smoothFogDensity;
     }
 
     // Update Atmospheric Sky Dome + Physical Scattering Sky + Periodic IBL Probe + CSM Cascades
@@ -6164,6 +6642,9 @@ export class SurvivalScene3D {
       if (!inVoyage) {
         this.foliageField.update(tSec, weather.wind, this.camera.position);
       }
+    }
+    if (inVoyage !== this.wasVoyageCulled) {
+      this.applyVoyageCulling(inVoyage);
     }
 
     if (this.starsMat) {
@@ -6300,7 +6781,6 @@ export class SurvivalScene3D {
       puff.scale.setScalar(scale);
     }
 
-    const underwaterNow = this.camera.position.y < this.currentWaterLevel + 0.04;
     if (underwaterNow) {
       this.rainDropletLevel = 1.0;
     } else if (weather.rain > 0.1 && !inVoyage) {
@@ -6405,7 +6885,7 @@ export class SurvivalScene3D {
         stormFactor: stormWeight,
         heatShimmerFactor,
         rainDroplets: this.rainDropletLevel,
-        underwaterFactor: underwaterNow ? 1 : 0,
+        underwaterFactor: this.smoothUnderwaterFactor,
         motionBlurStrength: this.extSettings.motionBlur ? 0.85 : 0,
         motionVelX: this.frameLookYawDelta * 2.4,
         motionVelY: this.frameLookPitchDelta * 2.4,
@@ -6416,25 +6896,36 @@ export class SurvivalScene3D {
         sunColor: this.sunLight.color,
         tSec,
       });
+      this.postFx.setDofEnabled(preset.dof && (this.photoMode || this.smoothUnderwaterFactor > 0.25));
     }
     this.frameLookYawDelta = 0;
     this.frameLookPitchDelta = 0;
 
-    // Rain particle fall around player (or around the Escape Boat at sea)
+    // Rain particle fall around camera with a near-lens horizontal exclusion cylinder
     if (this.rainPoints && this.rainMat) {
       if (weather.rain > 0.05) {
         this.rainPoints.visible = true;
-        this.rainMat.opacity = weather.rain * 0.65;
-        if (inVoyage) {
-          this.rainPoints.position.set(VOYAGE_STAGE_ORIGIN.x, 0, VOYAGE_STAGE_ORIGIN.z);
-        } else {
-          this.rainPoints.position.set(this.playerPos.x, 0, this.playerPos.z);
-        }
+        this.rainMat.opacity = weather.rain * 0.62;
+        const rainHeight = GRAPHICS_TUNING.RAIN_HEIGHT_RANGE;
+        const rainHalf = GRAPHICS_TUNING.RAIN_AREA_HALF_EXTENT;
+        const rainExcl = GRAPHICS_TUNING.RAIN_NEAR_EXCLUSION_RADIUS;
+        const rainExclSq = rainExcl * rainExcl;
+        this.rainPoints.position.set(
+          this.camera.position.x,
+          this.camera.position.y - rainHeight * 0.45,
+          this.camera.position.z
+        );
         const pos = this.rainPoints.geometry.attributes.position as THREE.BufferAttribute;
+        const arr = pos.array as Float32Array;
+        const dropDy = delta * 18;
         for (let i = 0; i < pos.count; i++) {
-          let y = pos.getY(i) - delta * 18;
-          if (y < 0) y = 22;
-          pos.setY(i, y);
+          const base = i * 3;
+          arr[base + 1] -= dropDy;
+          const x = arr[base];
+          const z = arr[base + 2];
+          if (arr[base + 1] < 0 || x * x + z * z < rainExclSq) {
+            randomizeRainDrop(arr, i, rainHalf, rainExcl, rainHeight, false);
+          }
         }
         pos.needsUpdate = true;
       } else {
@@ -6469,6 +6960,14 @@ export class SurvivalScene3D {
         this.scene.remove(p.mesh);
         if (!p.sharedGeom) {
           p.mesh.geometry.dispose();
+        }
+        if (!p.sharedMat && p.mesh.material !== this.forgeSmokeMat) {
+          const mat = p.mesh.material;
+          if (Array.isArray(mat)) {
+            mat.forEach((m) => m.dispose());
+          } else {
+            mat.dispose();
+          }
         }
         if (p.flipbookTex) {
           p.flipbookTex.dispose();
@@ -6913,6 +7412,7 @@ export class SurvivalScene3D {
         dmg
       );
       this.triggerToolSwing('bow');
+      this.notifyWeaponFire(0.45 + drawRatio * 0.45);
       audio.playBowShoot();
       return;
     }
@@ -6934,6 +7434,7 @@ export class SurvivalScene3D {
         Math.round(COMBAT_TUNING.WEAPON_DAMAGE.flare_gun * diffMult)
       );
       this.triggerToolSwing('flare_gun');
+      this.notifyWeaponFire(1.25);
       audio.playFlareShoot();
       return;
     }
@@ -6951,10 +7452,11 @@ export class SurvivalScene3D {
         'aura_bolt',
         origin,
         _camDir,
-        48,
+        COMBAT_TUNING.AURA_RIFLE_SPEED_MPS,
         Math.round(COMBAT_TUNING.WEAPON_DAMAGE.aura_rifle * diffMult)
       );
       this.triggerToolSwing('aura_rifle');
+      this.notifyWeaponFire(0.92);
       audio.playStoryCue('rifle');
       return;
     }
@@ -6972,10 +7474,11 @@ export class SurvivalScene3D {
         'harpoon',
         origin,
         _camDir,
-        36,
+        COMBAT_TUNING.HARPOON_SPEED_MPS,
         Math.round(COMBAT_TUNING.WEAPON_DAMAGE.harpoon_gun * diffMult)
       );
       this.triggerToolSwing('harpoon_gun');
+      this.notifyWeaponFire(1.18);
       audio.playStoryCue('harpoon');
       return;
     }
@@ -7204,7 +7707,7 @@ export class SurvivalScene3D {
     const prevFpIKVis = this.fpIKRig?.root.visible ?? false;
     const prevBodyVis = this.fullBodyController?.group.visible ?? false;
     const prevRainVis = this.rainPoints?.visible ?? false;
-    const prevGrassVis = this.foliageField?.grassMesh?.visible ?? false;
+    const prevFoliageVis = this.foliageField?.group.visible ?? false;
     const prevShadowAuto = this.renderer.shadowMap.autoUpdate;
     const prevTarget = this.renderer.getRenderTarget();
 
@@ -7214,8 +7717,40 @@ export class SurvivalScene3D {
     if (this.fpIKRig) this.fpIKRig.root.visible = false;
     if (this.fullBodyController) this.fullBodyController.group.visible = false;
     if (this.rainPoints) this.rainPoints.visible = false;
-    if (this.foliageField?.grassMesh) this.foliageField.grassMesh.visible = false;
+    if (this.foliageField) this.foliageField.group.visible = false;
+    this.reflectionTempHiddenNodes.length = 0;
+    const maxTreeReflDistSq = 200 * 200;
+    for (const rec of this.nodeMeshes.values()) {
+      if (!rec.group.visible) continue;
+      const t = rec.def.type;
+      let keep = false;
+      if (t === 'palm_tree' || t === 'resin_tree') {
+        const dx = rec.def.x - this.playerPos.x;
+        const dz = rec.def.z - this.playerPos.z;
+        keep = dx * dx + dz * dz <= maxTreeReflDistSq;
+      }
+      if (!keep) {
+        rec.group.visible = false;
+        this.reflectionTempHiddenNodes.push(rec.group);
+      }
+    }
+    const hideReflGroup = (g: THREE.Object3D | null | undefined) => {
+      if (g && g.visible) {
+        g.visible = false;
+        this.reflectionTempHiddenNodes.push(g);
+      }
+    };
+    hideReflGroup(this.crashSiteGroup);
+    hideReflGroup(this.springGroup);
+    if (this.landmarks) {
+      hideReflGroup(this.landmarks.groups.campGroup);
+      hideReflGroup(this.landmarks.groups.tailGroup);
+      hideReflGroup(this.landmarks.groups.caveGroup);
+      hideReflGroup(this.landmarks.groups.ruinsGroup);
+    }
+    this.storyProps3D?.setReflectionMode(true);
     this.worldLifeFx?.setUnderwaterAndScatterVisibility(true);
+    this.worldAssets?.setReflectionMode(true);
     this.renderer.shadowMap.autoUpdate = false;
 
     this.renderer.setRenderTarget(this.waterReflectionRT);
@@ -7230,8 +7765,14 @@ export class SurvivalScene3D {
     if (this.fpIKRig) this.fpIKRig.root.visible = prevFpIKVis;
     if (this.fullBodyController) this.fullBodyController.group.visible = prevBodyVis;
     if (this.rainPoints) this.rainPoints.visible = prevRainVis;
-    if (this.foliageField?.grassMesh) this.foliageField.grassMesh.visible = prevGrassVis;
+    if (this.foliageField) this.foliageField.group.visible = prevFoliageVis;
+    for (let i = 0; i < this.reflectionTempHiddenNodes.length; i++) {
+      this.reflectionTempHiddenNodes[i].visible = true;
+    }
+    this.reflectionTempHiddenNodes.length = 0;
+    this.storyProps3D?.setReflectionMode(false);
     this.worldLifeFx?.setUnderwaterAndScatterVisibility(false);
+    this.worldAssets?.setReflectionMode(false);
 
     if (this.oceanMaterials) {
       this.oceanMaterials.shaderMaterial.uniforms.uHasPlanarReflection.value = 1;
@@ -7279,6 +7820,7 @@ export class SurvivalScene3D {
 
       // Phase 5.3: Dynamic Resolution Scaling when FPS dips under load on Auto/High/Ultra
       if (
+        now - this.sceneStartMs >= PERFORMANCE_TUNING.DYNAMIC_RES_WARMUP_MS &&
         !this.isUiBlocked &&
         this.isWindowFocused &&
         !this.extSettings.batterySaver &&
@@ -7287,11 +7829,11 @@ export class SurvivalScene3D {
         if (this.fpsValue < PERFORMANCE_TUNING.DYNAMIC_RES_LOW_FPS_THRESHOLD && this.dynamicResScale > PERFORMANCE_TUNING.DYNAMIC_RES_MIN_SCALE) {
           this.dynamicResScale = Math.max(
             PERFORMANCE_TUNING.DYNAMIC_RES_MIN_SCALE,
-            this.dynamicResScale - 0.06
+            this.dynamicResScale - PERFORMANCE_TUNING.DYNAMIC_RES_STEP_DOWN
           );
           this.applyEffectivePixelRatioAndViewDist();
         } else if (this.fpsValue >= PERFORMANCE_TUNING.DYNAMIC_RES_RECOVER_FPS && this.dynamicResScale < 1.0) {
-          this.dynamicResScale = Math.min(1.0, this.dynamicResScale + 0.04);
+          this.dynamicResScale = Math.min(1.0, this.dynamicResScale + PERFORMANCE_TUNING.DYNAMIC_RES_STEP_UP);
           this.applyEffectivePixelRatioAndViewDist();
         }
       }
@@ -7501,13 +8043,18 @@ export class SurvivalScene3D {
       this.updateWaterReflection(inVoyage);
     }
 
-    if (this.csm) {
+    this.csmFrameCounter += 1;
+    if (this.csmFrameCounter % 8 === 0) {
+      this.updateSmallNodeDistanceCull();
+    }
+    const updateShadowsThisFrame =
+      this.renderer.shadowMap.enabled &&
+      (this.csmFrameCounter <= 2 ||
+        this.csmFrameCounter % GRAPHICS_TUNING.SHADOW_UPDATE_STRIDE === 0);
+    if (this.csm && updateShadowsThisFrame) {
       this.csm.update();
     }
-    this.csmFrameCounter += 1;
-    this.renderer.shadowMap.needsUpdate =
-      this.renderer.shadowMap.enabled &&
-      (this.fpsValue >= 54 || this.csmFrameCounter % 2 === 0);
+    this.renderer.shadowMap.needsUpdate = updateShadowsThisFrame;
 
     this.renderer.info.autoReset = false;
     this.renderer.info.reset();
@@ -7565,6 +8112,20 @@ export class SurvivalScene3D {
     this.worldLifeFx?.dispose();
     this.worldAssets?.dispose();
     this.worldAssets = null;
+    for (const proto of this.gatherNodeProtoCache.values()) {
+      proto.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (mesh.isMesh) {
+          mesh.geometry?.dispose();
+          if (Array.isArray(mesh.material)) {
+            mesh.material.forEach((m) => m.dispose());
+          } else {
+            mesh.material?.dispose();
+          }
+        }
+      });
+    }
+    this.gatherNodeProtoCache.clear();
     clearExternalTerrainGrid();
     this.foliageField?.dispose();
     this.terrainMatRecord?.material.dispose();
@@ -7574,6 +8135,16 @@ export class SurvivalScene3D {
     this.waterReflectionRT?.dispose();
     this.forgeSmokeGeom?.dispose();
     this.forgeSmokeMat?.dispose();
+    this.harvestPlaneGeom?.dispose();
+    this.stepPlaneGeom?.dispose();
+    this.fallbackPickupGeom?.dispose();
+    this.fallbackPickupMat?.dispose();
+    if (this.chipGeoms) {
+      Object.values(this.chipGeoms).forEach((g) => g.dispose());
+    }
+    if (this.chipMats) {
+      Object.values(this.chipMats).forEach((m) => m.dispose());
+    }
     this.iblEnvRT?.dispose();
     this.pmremGenerator?.dispose();
     this.pbrBank.dispose();

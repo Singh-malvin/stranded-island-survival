@@ -313,7 +313,9 @@ export class PostFXPipeline {
     const renderPass = new RenderPass(scene, camera);
     this.composer.addPass(renderPass);
 
-    this.ssaoPass = new SSAOPass(scene, camera, safeW, safeH, 32);
+    const ssaoW = Math.max(2, Math.floor(safeW * GRAPHICS_TUNING.SSAO_RESOLUTION_SCALE));
+    const ssaoH = Math.max(2, Math.floor(safeH * GRAPHICS_TUNING.SSAO_RESOLUTION_SCALE));
+    this.ssaoPass = new SSAOPass(scene, camera, ssaoW, ssaoH, GRAPHICS_TUNING.SSAO_KERNEL_SIZE);
     this.ssaoPass.output = SSAOPass.OUTPUT.Default;
     this.ssaoPass.kernelRadius = GRAPHICS_TUNING.SSAO_KERNEL_RADIUS;
     this.ssaoPass.minDistance = GRAPHICS_TUNING.SSAO_MIN_DISTANCE;
@@ -378,11 +380,20 @@ export class PostFXPipeline {
     this.gradePass.enabled = this.gradeEnabled;
   }
 
+  public setDofEnabled(enabled: boolean) {
+    if (this.dofEnabled === enabled) return;
+    this.dofEnabled = enabled;
+    this.bokehPass.enabled = enabled;
+  }
+
   public setSize(width: number, height: number, pixelRatio: number) {
     const safeW = Math.max(2, width);
     const safeH = Math.max(2, height);
     this.composer.setPixelRatio(pixelRatio);
     this.composer.setSize(safeW, safeH);
+    const ssaoW = Math.max(2, Math.floor(safeW * pixelRatio * GRAPHICS_TUNING.SSAO_RESOLUTION_SCALE));
+    const ssaoH = Math.max(2, Math.floor(safeH * pixelRatio * GRAPHICS_TUNING.SSAO_RESOLUTION_SCALE));
+    this.ssaoPass.setSize(ssaoW, ssaoH);
   }
 
   public updateUniforms(opts: {

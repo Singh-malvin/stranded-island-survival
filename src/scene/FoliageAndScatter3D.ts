@@ -452,14 +452,17 @@ export interface FoliageFieldHandle {
   grassMaterial: THREE.MeshStandardMaterial;
   grassCompileHook: (shader: THREE.WebGLProgramParametersWithUniforms) => void;
   setDensity: (density: number) => void;
+  resnapToTerrain: (nextGetTerrainHeight: (x: number, z: number) => number) => void;
   update: (tSec: number, wind: number, camPos: THREE.Vector3) => void;
   dispose: () => void;
 }
 
 export function buildFoliageAndScatter(
   scene: THREE.Scene,
-  getTerrainHeight: (x: number, z: number) => number
+  initialGetTerrainHeight: (x: number, z: number) => number
 ): FoliageFieldHandle {
+  let getTerrainHeight = initialGetTerrainHeight;
+  let currentDensity = 1;
   const group = new THREE.Group();
   const halfSpan = WORLD.ISLAND_RADIUS * 0.88;
 
@@ -538,64 +541,69 @@ transformed.z += sway * 0.65 * windStrength;`
 
   const dummy = new THREE.Object3D();
   const cColor = new THREE.Color();
+  const bleachTintColor = new THREE.Color(0x9ea14a);
   const grassPalette = [0x928240, 0xaa934e, 0x717535, 0xb89f58, 0x847b3d];
 
   let gPlaced = 0;
-  let sampleIdx = 1;
-  while (gPlaced < maxGrass && sampleIdx < maxGrass * 9) {
-    const [rx, rz] = r2LowDiscrepancy(sampleIdx++);
-    // Spatial hash jitter prevents visible Fibonacci diagonal rows across flat beaches
-    const wx = (rx - 0.5) * 2 * halfSpan + (hashSeed(sampleIdx * 11.3) - 0.5) * 1.65;
-    const wz = (rz - 0.5) * 2 * halfSpan + (hashSeed(sampleIdx * 17.7) - 0.5) * 1.65;
-    const h = getTerrainHeight(wx, wz);
+  const populateGrass = () => {
+    gPlaced = 0;
+    let sampleIdx = 1;
+    while (gPlaced < maxGrass && sampleIdx < maxGrass * 9) {
+      const [rx, rz] = r2LowDiscrepancy(sampleIdx++);
+      // Spatial hash jitter prevents visible Fibonacci diagonal rows across flat beaches
+      const wx = (rx - 0.5) * 2 * halfSpan + (hashSeed(sampleIdx * 11.3) - 0.5) * 1.65;
+      const wz = (rz - 0.5) * 2 * halfSpan + (hashSeed(sampleIdx * 17.7) - 0.5) * 1.65;
+      const h = getTerrainHeight(wx, wz);
 
-    // Avoid deep water & cliffs; smoothly taper probability across sand-to-grass transition zone
-    if (h < TERRAIN_TUNING.SAND_TO_GRASS_START_Y - 0.1 || h > TERRAIN_TUNING.ROCK_CLIFF_MIN_Y + 0.5)
-      continue;
-    const slopeY = estimateSlopeY(wx, wz, h);
-    if (slopeY < 0.78 || nearExclusion(wx, wz)) continue;
+      // Avoid deep water & cliffs; smoothly taper probability across sand-to-grass transition zone
+      if (h < TERRAIN_TUNING.SAND_TO_GRASS_START_Y - 0.1 || h > TERRAIN_TUNING.ROCK_CLIFF_MIN_Y + 0.5)
+        continue;
+      const slopeY = estimateSlopeY(wx, wz, h);
+      if (slopeY < 0.78 || nearExclusion(wx, wz)) continue;
 
-    const transT = THREE.MathUtils.clamp(
-      (h - (TERRAIN_TUNING.SAND_TO_GRASS_START_Y - 0.1)) /
-        (TERRAIN_TUNING.SAND_TO_GRASS_END_Y - TERRAIN_TUNING.SAND_TO_GRASS_START_Y + 0.4),
-      0,
-      1
-    );
-    const patchCluster = Math.max(
-      0,
-      0.38 + 0.62 * Math.sin(wx * 0.21 + wz * 0.16) * Math.cos(wx * 0.14 - wz * 0.19)
-    );
-    const keepProb = (0.04 + 0.78 * transT * transT) * patchCluster;
-    if (hashSeed(sampleIdx * 1.37) > keepProb) continue;
+      const transT = THREE.MathUtils.clamp(
+        (h - (TERRAIN_TUNING.SAND_TO_GRASS_START_Y - 0.1)) /
+          (TERRAIN_TUNING.SAND_TO_GRASS_END_Y - TERRAIN_TUNING.SAND_TO_GRASS_START_Y + 0.4),
+        0,
+        1
+      );
+      const patchCluster = Math.max(
+        0,
+        0.38 + 0.62 * Math.sin(wx * 0.21 + wz * 0.16) * Math.cos(wx * 0.14 - wz * 0.19)
+      );
+      const keepProb = (0.04 + 0.78 * transT * transT) * patchCluster;
+      if (hashSeed(sampleIdx * 1.37) > keepProb) continue;
 
-    dummy.position.set(wx, h - 0.02, wz);
-    dummy.rotation.set(
-      (hashSeed(sampleIdx * 2.1) - 0.5) * 0.15,
-      hashSeed(sampleIdx * 3.7) * Math.PI * 2,
-      (hashSeed(sampleIdx * 4.3) - 0.5) * 0.15
-    );
-    const heightScale = THREE.MathUtils.lerp(
-      TERRAIN_TUNING.GRASS_MIN_HEIGHT,
-      TERRAIN_TUNING.GRASS_MAX_HEIGHT,
-      transT * 0.65 + hashSeed(sampleIdx * 5.9) * 0.35
-    );
-    const widthScale = 0.75 + hashSeed(sampleIdx * 6.7) * 0.75;
-    dummy.scale.set(widthScale, heightScale, widthScale);
-    dummy.updateMatrix();
-    grassMesh.setMatrixAt(gPlaced, dummy.matrix);
+      dummy.position.set(wx, h - 0.02, wz);
+      dummy.rotation.set(
+        (hashSeed(sampleIdx * 2.1) - 0.5) * 0.15,
+        hashSeed(sampleIdx * 3.7) * Math.PI * 2,
+        (hashSeed(sampleIdx * 4.3) - 0.5) * 0.15
+      );
+      const heightScale = THREE.MathUtils.lerp(
+        TERRAIN_TUNING.GRASS_MIN_HEIGHT,
+        TERRAIN_TUNING.GRASS_MAX_HEIGHT,
+        transT * 0.65 + hashSeed(sampleIdx * 5.9) * 0.35
+      );
+      const widthScale = 0.75 + hashSeed(sampleIdx * 6.7) * 0.75;
+      dummy.scale.set(widthScale, heightScale, widthScale);
+      dummy.updateMatrix();
+      grassMesh.setMatrixAt(gPlaced, dummy.matrix);
 
-    const hex = grassPalette[Math.floor(hashSeed(sampleIdx * 7.3) * grassPalette.length)];
-    cColor.setHex(hex);
-    // Slightly sun-bleached olive straw near sunny beach transition
-    if (transT < 0.5) {
-      cColor.lerp(new THREE.Color(0x9ea14a), (0.5 - transT) * 0.7);
+      const hex = grassPalette[Math.floor(hashSeed(sampleIdx * 7.3) * grassPalette.length)];
+      cColor.setHex(hex);
+      // Slightly sun-bleached olive straw near sunny beach transition
+      if (transT < 0.5) {
+        cColor.lerp(bleachTintColor, (0.5 - transT) * 0.7);
+      }
+      grassMesh.setColorAt(gPlaced, cColor);
+      gPlaced++;
     }
-    grassMesh.setColorAt(gPlaced, cColor);
-    gPlaced++;
-  }
-  grassMesh.count = gPlaced;
-  grassMesh.instanceMatrix.needsUpdate = true;
-  if (grassMesh.instanceColor) grassMesh.instanceColor.needsUpdate = true;
+    grassMesh.count = gPlaced;
+    grassMesh.instanceMatrix.needsUpdate = true;
+    if (grassMesh.instanceColor) grassMesh.instanceColor.needsUpdate = true;
+  };
+  populateGrass();
   group.add(grassMesh);
 
   // -------------------------------------------------------------------------
@@ -611,44 +619,52 @@ transformed.z += sway * 0.65 * windStrength;`
     scaleRange: [number, number],
     colors: number[],
     flattenY: boolean = false
-  ): { mesh: THREE.InstancedMesh; total: number } => {
+  ): { mesh: THREE.InstancedMesh; total: number; repopulate: () => void } => {
     const im = new THREE.InstancedMesh(geom, mat, maxCount);
     im.receiveShadow = true;
     im.castShadow = false;
-    let placed = 0;
-    let idx = 10000 + maxCount * 13;
-    while (placed < maxCount && idx < 10000 + maxCount * 95) {
-      const [rx, rz] = r2LowDiscrepancy(idx++);
-      const wx = (rx - 0.5) * 2 * halfSpan + (hashSeed(idx * 13.1) - 0.5) * 1.85;
-      const wz = (rz - 0.5) * 2 * halfSpan + (hashSeed(idx * 19.3) - 0.5) * 1.85;
-      const h = getTerrainHeight(wx, wz);
-      if (h < minY || h > maxY) continue;
-      if (estimateSlopeY(wx, wz, h) < minSlope) continue;
-      if (nearExclusion(wx, wz)) continue;
+    const batch = {
+      mesh: im,
+      total: 0,
+      repopulate: () => {
+        let placed = 0;
+        let idx = 10000 + maxCount * 13;
+        while (placed < maxCount && idx < 10000 + maxCount * 95) {
+          const [rx, rz] = r2LowDiscrepancy(idx++);
+          const wx = (rx - 0.5) * 2 * halfSpan + (hashSeed(idx * 13.1) - 0.5) * 1.85;
+          const wz = (rz - 0.5) * 2 * halfSpan + (hashSeed(idx * 19.3) - 0.5) * 1.85;
+          const h = getTerrainHeight(wx, wz);
+          if (h < minY || h > maxY) continue;
+          if (estimateSlopeY(wx, wz, h) < minSlope) continue;
+          if (nearExclusion(wx, wz)) continue;
 
-      const s = THREE.MathUtils.lerp(scaleRange[0], scaleRange[1], hashSeed(idx * 2.7));
-      dummy.position.set(wx, h + (flattenY ? s * 0.14 : s * 0.25), wz);
-      dummy.rotation.set(
-        flattenY ? (hashSeed(idx * 3.1) - 0.5) * 0.35 : hashSeed(idx * 3.1) * Math.PI,
-        hashSeed(idx * 4.7) * Math.PI * 2,
-        flattenY ? (hashSeed(idx * 5.3) - 0.5) * 0.35 : hashSeed(idx * 5.3) * Math.PI
-      );
-      dummy.scale.set(
-        s * (0.85 + hashSeed(idx * 6.1) * 0.45),
-        s * (flattenY ? 0.42 : 0.65 + hashSeed(idx * 7.1) * 0.55),
-        s * (0.85 + hashSeed(idx * 8.3) * 0.45)
-      );
-      dummy.updateMatrix();
-      im.setMatrixAt(placed, dummy.matrix);
-      cColor.setHex(colors[Math.floor(hashSeed(idx * 9.7) * colors.length)]);
-      im.setColorAt(placed, cColor);
-      placed++;
-    }
-    im.count = placed;
-    im.instanceMatrix.needsUpdate = true;
-    if (im.instanceColor) im.instanceColor.needsUpdate = true;
+          const s = THREE.MathUtils.lerp(scaleRange[0], scaleRange[1], hashSeed(idx * 2.7));
+          dummy.position.set(wx, h + (flattenY ? s * 0.14 : s * 0.25), wz);
+          dummy.rotation.set(
+            flattenY ? (hashSeed(idx * 3.1) - 0.5) * 0.35 : hashSeed(idx * 3.1) * Math.PI,
+            hashSeed(idx * 4.7) * Math.PI * 2,
+            flattenY ? (hashSeed(idx * 5.3) - 0.5) * 0.35 : hashSeed(idx * 5.3) * Math.PI
+          );
+          dummy.scale.set(
+            s * (0.85 + hashSeed(idx * 6.1) * 0.45),
+            s * (flattenY ? 0.42 : 0.65 + hashSeed(idx * 7.1) * 0.55),
+            s * (0.85 + hashSeed(idx * 8.3) * 0.45)
+          );
+          dummy.updateMatrix();
+          im.setMatrixAt(placed, dummy.matrix);
+          cColor.setHex(colors[Math.floor(hashSeed(idx * 9.7) * colors.length)]);
+          im.setColorAt(placed, cColor);
+          placed++;
+        }
+        im.count = placed;
+        im.instanceMatrix.needsUpdate = true;
+        if (im.instanceColor) im.instanceColor.needsUpdate = true;
+        batch.total = placed;
+      },
+    };
+    batch.repopulate();
     group.add(im);
-    return { mesh: im, total: placed };
+    return batch;
   };
 
   // Seashells scattered along beach wash & dry sand
@@ -724,6 +740,7 @@ transformed.z += sway * 0.65 * windStrength;`
 
   const setDensity = (density: number) => {
     const d = THREE.MathUtils.clamp(density, 0, 1);
+    currentDensity = d;
     grassMesh.visible = d > 0.02;
     grassMesh.count = Math.floor(gPlaced * d);
 
@@ -732,6 +749,16 @@ transformed.z += sway * 0.65 * windStrength;`
     pebbles.mesh.count = Math.floor(pebbles.total * propScale);
     twigs.mesh.count = Math.floor(twigs.total * propScale);
     ferns.mesh.count = Math.floor(ferns.total * (d <= 0.02 ? 0.15 : d));
+  };
+
+  const resnapToTerrain = (nextGetTerrainHeight: (x: number, z: number) => number) => {
+    getTerrainHeight = nextGetTerrainHeight;
+    populateGrass();
+    shells.repopulate();
+    pebbles.repopulate();
+    twigs.repopulate();
+    ferns.repopulate();
+    setDensity(currentDensity);
   };
 
   const update = (tSec: number, wind: number, camPos: THREE.Vector3) => {
@@ -759,6 +786,7 @@ transformed.z += sway * 0.65 * windStrength;`
     grassMaterial: grassMat,
     grassCompileHook,
     setDensity,
+    resnapToTerrain,
     update,
     dispose,
   };

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { WORLD } from '../survival/config.ts';
 import { STATION_REPAIR_DEFS } from '../survival/quests.ts';
 import type { GatherNodeType, StationRepairId, StoryClueDef } from '../survival/types.ts';
+import { mergeStaticMeshesByMaterial } from './meshMerge.ts';
 
 export interface StationSystemMeshRecord {
   id: StationRepairId;
@@ -289,6 +290,12 @@ export function buildInteriorLandmarks(
       statusMat,
     });
   });
+
+  mergeStaticMeshesByMaterial(campGroup);
+  mergeStaticMeshesByMaterial(tailGroup);
+  mergeStaticMeshesByMaterial(caveGroup, new Set<THREE.Object3D>(caveCrystalLights));
+  mergeStaticMeshesByMaterial(ruinsGroup);
+  mergeStaticMeshesByMaterial(stationGroup, new Set<THREE.Object3D>([radioTowerBeacon]));
 
   return {
     stationSystems,

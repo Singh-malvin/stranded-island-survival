@@ -16,6 +16,7 @@ import { POWER_TUNING, PRISON_TUNING } from '../survival/config.ts';
 import type { PowerId, SurvivalState } from '../survival/types.ts';
 import type { WorldCollider } from '../survival/world.ts';
 import { extractWorldColliderFromGLB, type LoadedGLBSet } from './GLBModelBank.ts';
+import { mergeStaticMeshesByMaterial } from './meshMerge.ts';
 
 export type StoryHoverTarget =
   | { kind: 'shrine'; powerId: PowerId; pos: THREE.Vector3; label: string; dist: number }
@@ -76,6 +77,8 @@ export class StoryWorldProps3D {
 
   private readonly cleaveRing: THREE.Mesh;
   private cleaveTimer = 0;
+  private voyageHidden = false;
+  private readonly reflSavedVis: Array<{ obj: THREE.Object3D; vis: boolean }> = [];
 
   constructor(
     scene: THREE.Scene,
@@ -108,6 +111,7 @@ export class StoryWorldProps3D {
       this.breadcrumbGroup.add(step);
     }
     this.root.add(this.breadcrumbGroup);
+    mergeStaticMeshesByMaterial(this.breadcrumbGroup);
 
     const caveSmokeY = getTerrainHeight(-74, -44);
     this.caveRidgeLight = new THREE.PointLight(0xf97316, 1.8, 22, 1.5);
@@ -244,6 +248,8 @@ export class StoryWorldProps3D {
       halfD: 0.45,
       yaw: 0,
     };
+    const citadelExclude = this.prisonGateObj ? new Set<THREE.Object3D>([this.prisonGateObj]) : undefined;
+    mergeStaticMeshesByMaterial(this.citadelRoot, citadelExclude);
 
     // Armory display weapons on pedestals
     const ry = getTerrainHeight(PRISON_TUNING.ARMORY_RIFLE_POS.x, PRISON_TUNING.ARMORY_RIFLE_POS.z);
@@ -384,6 +390,7 @@ export class StoryWorldProps3D {
       this.outerReefGroup.add(g);
     }
     this.root.add(this.outerReefGroup);
+    mergeStaticMeshesByMaterial(this.outerReefGroup);
 
     // -----------------------------------------------------------------------
     // 6. AUTONOMOUS ROAMING AURA KING SILHOUETTE + [T] AURA SIGHT HALO
@@ -458,6 +465,42 @@ export class StoryWorldProps3D {
     return [];
   }
 
+  public resnapToTerrain(getTerrainHeight: (x: number, z: number) => number): void {
+    for (const child of this.breadcrumbGroup.children) {
+      const fy = getTerrainHeight(child.position.x, child.position.z);
+      child.visible = fy >= 0.25;
+      child.position.y = fy + 0.02;
+    }
+
+    const caveSmokeY = getTerrainHeight(-74, -44);
+    this.caveRidgeLight.position.y = caveSmokeY + 2.2;
+
+    for (const sh of this.shrines) {
+      const sy = getTerrainHeight(sh.pos.x, sh.pos.z);
+      sh.pos.y = sy;
+      sh.root.position.y = sy - 0.05;
+    }
+
+    const sh = PRISON_TUNING.STRONGHOLD_POS;
+    const shY = getTerrainHeight(sh.x, sh.z);
+    this.citadelRoot.position.y = shY - 0.1;
+    this.citadelRoot.updateMatrixWorld(true);
+
+    this.gatePos.y = getTerrainHeight(this.gatePos.x, this.gatePos.z);
+
+    this.riflePos.y = getTerrainHeight(this.riflePos.x, this.riflePos.z) + 1.08;
+    this.armoryRifleProp.position.y = this.riflePos.y;
+
+    this.harpoonPos.y = getTerrainHeight(this.harpoonPos.x, this.harpoonPos.z) + 1.08;
+    this.armoryHarpoonProp.position.y = this.harpoonPos.y;
+
+    this.lockerPos.y = getTerrainHeight(this.lockerPos.x, this.lockerPos.z) + 0.85;
+    this.lockerBeacon.position.y = this.lockerPos.y;
+
+    this.ventPos.y = getTerrainHeight(this.ventPos.x, this.ventPos.z) + 0.52;
+    this.ventShimmer.position.y = this.ventPos.y;
+  }
+
   public update(
     dt: number,
     elapsedSec: number,
@@ -521,9 +564,20 @@ export class StoryWorldProps3D {
       }
       gv.mesh.visible = true;
       const gy = getTerrainHeight(gs.x, gs.z);
-      gv.pos.set(gs.x, gy, gs.z);
+      const safeDt = Math.min(0.05, Math.max(0.001, dt));
+      if (gv.pos.lengthSq() < 0.001 || Math.hypot(gs.x - gv.pos.x, gs.z - gv.pos.z) > 10) {
+        gv.pos.set(gs.x, gy, gs.z);
+        gv.mesh.rotation.y = gs.yaw;
+      } else {
+        gv.pos.x = THREE.MathUtils.damp(gv.pos.x, gs.x, 12, safeDt);
+        gv.pos.y = THREE.MathUtils.damp(gv.pos.y, gy, 14, safeDt);
+        gv.pos.z = THREE.MathUtils.damp(gv.pos.z, gs.z, 12, safeDt);
+        let yd = gs.yaw - gv.mesh.rotation.y;
+        while (yd > Math.PI) yd -= Math.PI * 2;
+        while (yd < -Math.PI) yd += Math.PI * 2;
+        gv.mesh.rotation.y += yd * (1 - Math.exp(-10 * safeDt));
+      }
       gv.mesh.position.copy(gv.pos);
-      gv.mesh.rotation.y = gs.yaw;
       const hot = gs.alert >= 50 || state.stronghold.alertLevel >= 60;
       gv.visionMat.color.setHex(hot ? 0xef4444 : gs.alert >= 20 ? 0xf59e0b : 0xa855f7);
       gv.visionMat.opacity = hot ? 0.18 : 0.10;
@@ -543,8 +597,22 @@ export class StoryWorldProps3D {
     this.roamingKingRoot.visible = showRoamingKing;
     if (showRoamingKing) {
       const ky = getTerrainHeight(state.auraKingAI.x, state.auraKingAI.z);
-      this.roamingKingRoot.position.set(state.auraKingAI.x, ky, state.auraKingAI.z);
-      this.roamingKingRoot.rotation.y = state.auraKingAI.yaw;
+      const safeDt = Math.min(0.05, Math.max(0.001, dt));
+      if (
+        this.roamingKingRoot.position.lengthSq() < 0.001 ||
+        Math.hypot(state.auraKingAI.x - this.roamingKingRoot.position.x, state.auraKingAI.z - this.roamingKingRoot.position.z) > 12
+      ) {
+        this.roamingKingRoot.position.set(state.auraKingAI.x, ky, state.auraKingAI.z);
+        this.roamingKingRoot.rotation.y = state.auraKingAI.yaw;
+      } else {
+        this.roamingKingRoot.position.x = THREE.MathUtils.damp(this.roamingKingRoot.position.x, state.auraKingAI.x, 11, safeDt);
+        this.roamingKingRoot.position.y = THREE.MathUtils.damp(this.roamingKingRoot.position.y, ky, 12, safeDt);
+        this.roamingKingRoot.position.z = THREE.MathUtils.damp(this.roamingKingRoot.position.z, state.auraKingAI.z, 11, safeDt);
+        let kd = state.auraKingAI.yaw - this.roamingKingRoot.rotation.y;
+        while (kd > Math.PI) kd -= Math.PI * 2;
+        while (kd < -Math.PI) kd += Math.PI * 2;
+        this.roamingKingRoot.rotation.y += kd * (1 - Math.exp(-9 * safeDt));
+      }
       const isHunting = state.auraKingAI.awareness === 'hunting' || state.auraKingAI.awareness === 'catching';
       this.kingAuraLight.color.setHex(isHunting ? 0xf59e0b : 0xa855f7);
       this.kingAuraLight.intensity = isHunting ? 4.8 : 2.6;
@@ -562,6 +630,71 @@ export class StoryWorldProps3D {
       if (this.cleaveTimer <= 0) {
         this.cleaveRing.visible = false;
       }
+    }
+    if (this.voyageHidden) {
+      this.applyVoyageVisibility(true);
+    }
+  }
+
+  private applyVoyageVisibility(hidden: boolean): void {
+    this.citadelRoot.visible = !hidden;
+    this.ventShimmer.visible = !hidden;
+    if (hidden) {
+      this.breadcrumbGroup.visible = false;
+      this.caveRidgeLight.visible = false;
+      this.armoryRifleProp.visible = false;
+      this.armoryHarpoonProp.visible = false;
+      this.lockerBeacon.visible = false;
+      this.roamingKingRoot.visible = false;
+      for (let i = 0; i < this.shrines.length; i++) {
+        this.shrines[i].root.visible = false;
+        this.shrines[i].light.visible = false;
+      }
+      for (let i = 0; i < this.guards.length; i++) {
+        this.guards[i].mesh.visible = false;
+      }
+    } else {
+      for (let i = 0; i < this.shrines.length; i++) {
+        this.shrines[i].root.visible = true;
+        this.shrines[i].light.visible = true;
+      }
+    }
+  }
+
+  public setVoyageMode(inVoyage: boolean): void {
+    if (this.voyageHidden === inVoyage) return;
+    this.voyageHidden = inVoyage;
+    this.applyVoyageVisibility(inVoyage);
+  }
+
+  public setReflectionMode(reflecting: boolean): void {
+    if (reflecting) {
+      this.reflSavedVis.length = 0;
+      const hideTemp = (obj: THREE.Object3D) => {
+        if (obj.visible) {
+          this.reflSavedVis.push({ obj, vis: true });
+          obj.visible = false;
+        }
+      };
+      hideTemp(this.breadcrumbGroup);
+      hideTemp(this.caveRidgeLight);
+      hideTemp(this.armoryRifleProp);
+      hideTemp(this.armoryHarpoonProp);
+      hideTemp(this.lockerBeacon);
+      hideTemp(this.ventShimmer);
+      for (let i = 0; i < this.shrines.length; i++) {
+        hideTemp(this.shrines[i].root);
+        hideTemp(this.shrines[i].light);
+      }
+      for (let i = 0; i < this.guards.length; i++) {
+        hideTemp(this.guards[i].mesh);
+      }
+    } else {
+      for (let i = 0; i < this.reflSavedVis.length; i++) {
+        const entry = this.reflSavedVis[i];
+        entry.obj.visible = entry.vis;
+      }
+      this.reflSavedVis.length = 0;
     }
   }
 
@@ -646,6 +779,8 @@ export class StoryWorldProps3D {
         dist,
       }));
     }
+
+    if (best) return best;
 
     for (const gv of this.guards) {
       if (!gv.mesh.visible) continue;

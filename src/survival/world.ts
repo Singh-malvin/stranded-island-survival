@@ -255,6 +255,28 @@ export function isPointBlockedByCliffMask(x: number, z: number): boolean {
   return g.cliffMask[iy * g.res + ix] > 0;
 }
 
+/** Sample bilinear terrain height from an external TerrainGridData buffer at world (x, z). */
+export function sampleTerrainGridBilinear(
+  g: { heights: Float32Array; res: number; spanM: number },
+  x: number,
+  z: number
+): number | null {
+  const half = g.spanM * 0.5;
+  if (x < -half || x > half || z < -half || z > half) return null;
+  const u = Math.max(0, Math.min(g.res - 1.0001, ((x + half) / g.spanM) * (g.res - 1)));
+  const v = Math.max(0, Math.min(g.res - 1.0001, ((-z + half) / g.spanM) * (g.res - 1)));
+  const i0 = Math.floor(u);
+  const j0 = Math.floor(v);
+  const fx = u - i0;
+  const fy = v - j0;
+  const r = g.res;
+  const h00 = g.heights[j0 * r + i0];
+  const h10 = g.heights[j0 * r + i0 + 1];
+  const h01 = g.heights[(j0 + 1) * r + i0];
+  const h11 = g.heights[(j0 + 1) * r + i0 + 1];
+  return (h00 * (1 - fx) + h10 * fx) * (1 - fy) + (h01 * (1 - fx) + h11 * fx) * fy;
+}
+
 /**
  * Deterministic spread-out 3D heightmap shared between pure gameplay physics,
  * node/wildlife placement, Fog-of-War, and Three.js terrain geometry.
@@ -266,21 +288,8 @@ export function sampleIslandHeight(
 ): number {
   const g = externalTerrainGrid;
   if (g && Math.abs(islandRadius - WORLD.ISLAND_RADIUS) < 1) {
-    const half = g.spanM * 0.5;
-    if (x >= -half && x <= half && z >= -half && z <= half) {
-      const u = Math.max(0, Math.min(g.res - 1.0001, ((x + half) / g.spanM) * (g.res - 1)));
-      const v = Math.max(0, Math.min(g.res - 1.0001, ((-z + half) / g.spanM) * (g.res - 1)));
-      const i0 = Math.floor(u);
-      const j0 = Math.floor(v);
-      const fx = u - i0;
-      const fy = v - j0;
-      const r = g.res;
-      const h00 = g.heights[j0 * r + i0];
-      const h10 = g.heights[j0 * r + i0 + 1];
-      const h01 = g.heights[(j0 + 1) * r + i0];
-      const h11 = g.heights[(j0 + 1) * r + i0 + 1];
-      return (h00 * (1 - fx) + h10 * fx) * (1 - fy) + (h01 * (1 - fx) + h11 * fx) * fy;
-    }
+    const hSample = sampleTerrainGridBilinear(g, x, z);
+    if (hSample !== null) return hSample;
   }
   const cz = -8;
   const rx = islandRadius * 0.72; // ~187m half-width

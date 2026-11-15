@@ -458,7 +458,11 @@ export class PlayerFullBodyController {
     });
     this.group.add(this.model);
 
-    const getB = (n: string) => (this.model.getObjectByName(n) as THREE.Bone | undefined) ?? null;
+    const getB = (n: string) =>
+      ((this.model.getObjectByName(n) ??
+        this.model.getObjectByName(THREE.PropertyBinding.sanitizeNodeName(n))) as
+        | THREE.Bone
+        | undefined) ?? null;
     this.hips = getB('hips');
     this.spine = getB('spine');
     this.chest = getB('chest');
@@ -517,10 +521,11 @@ export class PlayerFullBodyController {
       _rayHits.length = 0;
       for (let i = 0; i < ctx.footRayTargets.length; i++) {
         const obj = ctx.footRayTargets[i];
-        // Quick 2D distance cull before invoking triangle intersect
+        // Quick 2D distance cull before invoking triangle intersect (crash wreckage is centered near origin within ~45m)
         const dx = obj.position.x - wx;
         const dz = obj.position.z - wz;
-        if (dx * dx + dz * dz > 1600 && obj.name !== 'crash_site_group') continue;
+        const maxDistSq = obj.name === 'crash_site_group' ? 2025 : 1600;
+        if (dx * dx + dz * dz > maxDistSq) continue;
         this.raycaster.intersectObject(obj, true, _rayHits);
       }
       for (let i = 0; i < _rayHits.length; i++) {

@@ -389,6 +389,14 @@ export const GRAPHICS_TUNING = {
   BASE_FOG_DENSITY: 0.0021,
   /** Peak exponential fog density during tropical storms. */
   STORM_FOG_DENSITY: 0.0058,
+  /** Dense turquoise underwater exponential fog density when submerged. */
+  UNDERWATER_FOG_DENSITY: 0.048,
+  UNDERWATER_FOG_COLOR: 0x0b4a5e,
+  /** Temporal exponential smoothing rates (1/sec) for fog, weather atmosphere & diving transitions. */
+  FOG_COLOR_DAMP_SPEED: 3.2,
+  FOG_DENSITY_DAMP_SPEED: 2.6,
+  WEATHER_ATMOSPHERE_DAMP_SPEED: 1.85,
+  UNDERWATER_TRANSITION_SPEED: 9.0,
   /** Physical Sky shader defaults blended across time of day. */
   SKY_TURBIDITY_DAY: 2.2,
   SKY_TURBIDITY_DUSK: 7.4,
@@ -400,9 +408,18 @@ export const GRAPHICS_TUNING = {
   CLOUD_DRIFT_SPEED: 0.011,
   CLOUD_COVERAGE_CLEAR: 0.42,
   CLOUD_COVERAGE_STORM: 0.86,
+  /** Storm horizon/fog slate tint that damps flat vivid sunset cutouts during heavy storms. */
+  STORM_FOG_SLATE_COLOR: 0x455365,
+  STORM_FOG_SLATE_BLEND: 0.72,
+  /** Rain particle volume & camera-lens near-exclusion cylinder. */
+  RAIN_DROP_COUNT: 520,
+  RAIN_AREA_HALF_EXTENT: 24,
+  RAIN_HEIGHT_RANGE: 22,
+  RAIN_SPRITE_SIZE: 0.24,
+  RAIN_NEAR_EXCLUSION_RADIUS: 2.8,
   /** Cascaded Shadow Maps config (High / Ultra). */
-  CSM_CASCADES: 3,
-  CSM_MAX_FAR: 160,
+  CSM_CASCADES: 2,
+  CSM_MAX_FAR: 125,
   /** Reflection render-target resolution (width/height) for ocean planar mirror. */
   WATER_REFLECTION_SIZE: 384,
   /** In-game hour delta threshold before refreshing procedural sky PMREM IBL probe. */
@@ -419,7 +436,13 @@ export const GRAPHICS_TUNING = {
   BLOOM_STRENGTH: 0.11,
   BLOOM_RADIUS: 0.28,
   BLOOM_THRESHOLD: 1.24,
-  /** Screen-space Ambient Occlusion pass parameters. */
+  /** Screen-space Ambient Occlusion pass parameters & adaptive optimization budgets. */
+  SSAO_RESOLUTION_SCALE: 0.5,
+  SSAO_KERNEL_SIZE: 16,
+  SHADOW_UPDATE_STRIDE: 2,
+  NODE_MIN_SHADOW_RADIUS: 1.05,
+  SMALL_NODE_CULL_DIST_M: 120,
+  BOULDER_MAX_CLIFF_DROP_M: 4.5,
   SSAO_KERNEL_RADIUS: 0.95,
   SSAO_MIN_DISTANCE: 0.00032,
   SSAO_MAX_DISTANCE: 0.0068,
@@ -635,8 +658,12 @@ export const PERFORMANCE_TUNING = {
   MENU_OPEN_FPS_CAP: 10,
   /** Dynamic resolution threshold: lower internal render scale slightly if FPS stays below this. */
   DYNAMIC_RES_LOW_FPS_THRESHOLD: 45,
-  DYNAMIC_RES_RECOVER_FPS: 55,
+  DYNAMIC_RES_RECOVER_FPS: 52,
   DYNAMIC_RES_MIN_SCALE: 0.65,
+  /** Skip dynamic resolution downscaling during initial shader/asset warmup (ms). */
+  DYNAMIC_RES_WARMUP_MS: 3500,
+  DYNAMIC_RES_STEP_DOWN: 0.04,
+  DYNAMIC_RES_STEP_UP: 0.05,
   /** Maximum devicePixelRatio per quality preset (critical for Retina Mac thermal control). */
   PIXEL_RATIO_CAP_LOW: 1.0,
   PIXEL_RATIO_CAP_MEDIUM: 1.25,
@@ -763,10 +790,19 @@ export const IK_SWAY_TUNING = {
   IMPACT_RECOIL_PITCH: 0.28,
   IMPACT_RECOIL_DECAY_SPEED: 14.0,
 
+  /** Smooth weapon/item equip raise & ranged firing kick. */
+  EQUIP_DRAW_SPEED: 11.5,
+  EQUIP_DRAW_DROP_Y: 0.13,
+  WEAPON_RECOIL_KICK_Z: 0.075,
+  WEAPON_RECOIL_PITCH: 0.16,
+  WEAPON_RECOIL_DECAY_SPEED: 16.0,
+
   /** Inspect item (F on non-consumables or T anytime). */
   INSPECT_DURATION_SEC: 3.4,
   INSPECT_POS_OFFSET: [-0.09, 0.05, 0.14] as const,
   INSPECT_ROT_SPEED: 1.55,
+  /** Downward shoulder pitch (rad) keeping the idle offhand cleanly below the bottom hotbar in 1H grips. */
+  OFFHAND_1H_DROP_PITCH: 0.48,
 } as const;
 
 export const BODY_IK_TUNING = {

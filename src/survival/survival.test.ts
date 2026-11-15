@@ -6,6 +6,8 @@ import {
   BOSS_TUNING,
   COMBAT_TUNING,
   FORGE_TUNING,
+  GRAPHICS_TUNING,
+  IK_SWAY_TUNING,
   NEEDS,
   NODE_RESPAWN_HOURS,
   PART5_IMMERSION_TUNING,
@@ -1737,5 +1739,39 @@ describe('Non-Linear Story Rework — Daniel AI, 4 Relic Powers, Stronghold Heis
     // Touch tickAuraKingAI safely returns without throwing
     const aiTick = tickAuraKingAI(brawled.state, 0.5, { stance: 'crouch', hasActiveFireNearby: false, gameHoursDelta: 0.01 });
     assert.equal(aiTick.state.stronghold.guards.length, 3);
+  });
+});
+
+describe('Polish Pass — Smooth Fog, Underwater Transitions, Equip Draw & Instant Node Depletion', () => {
+  it('defines finite positive smoothing & underwater fog constants and instant depletion availability update', () => {
+    assert.ok(GRAPHICS_TUNING.FOG_COLOR_DAMP_SPEED > 0 && GRAPHICS_TUNING.FOG_COLOR_DAMP_SPEED < 12);
+    assert.ok(GRAPHICS_TUNING.FOG_DENSITY_DAMP_SPEED > 0 && GRAPHICS_TUNING.FOG_DENSITY_DAMP_SPEED < 10);
+    assert.ok(GRAPHICS_TUNING.WEATHER_ATMOSPHERE_DAMP_SPEED > 0);
+    assert.ok(GRAPHICS_TUNING.UNDERWATER_FOG_DENSITY > GRAPHICS_TUNING.STORM_FOG_DENSITY);
+    assert.ok(GRAPHICS_TUNING.UNDERWATER_TRANSITION_SPEED > GRAPHICS_TUNING.FOG_DENSITY_DAMP_SPEED);
+    assert.ok(IK_SWAY_TUNING.EQUIP_DRAW_SPEED > 5 && IK_SWAY_TUNING.EQUIP_DRAW_DROP_Y > 0.05);
+    assert.ok(IK_SWAY_TUNING.WEAPON_RECOIL_KICK_Z > 0 && IK_SWAY_TUNING.WEAPON_RECOIL_DECAY_SPEED > 5);
+
+    // Picking up / depleting a node updates isNodeAvailable immediately without waiting for respawn
+    const s = createInitialSurvivalState();
+    const nodes = generateIslandNodes();
+    const looseStone = nodes.find((n) => n.type === 'loose_stone')!;
+    assert.equal(isNodeAvailable(looseStone.id, s.nodes, s.clock.totalHours), true);
+    const pick = hitGatherNode(s, looseStone);
+    assert.equal(pick.hit, true);
+    assert.equal(pick.depleted, true);
+    assert.equal(isNodeAvailable(looseStone.id, pick.state.nodes, pick.state.clock.totalHours), false);
+
+    // Blocked rock without pickaxe never depletes or grants resources
+    const boulder = nodes.find((n) => n.type === 'boulder')!;
+    const blocked = hitGatherNode(pick.state, boulder);
+    assert.equal(blocked.hit, false);
+    assert.equal(blocked.sound, 'blocked');
+    assert.equal(isNodeAvailable(boulder.id, blocked.state.nodes, blocked.state.clock.totalHours), true);
+
+    // Respawn clock restores depleted loose stone cleanly once interval passes
+    const respawnH = NODE_RESPAWN_HOURS.loose_stone ?? 12;
+    const futureHours = pick.state.clock.totalHours + respawnH + 1;
+    assert.equal(isNodeAvailable(looseStone.id, pick.state.nodes, futureHours), true);
   });
 });

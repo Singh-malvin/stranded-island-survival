@@ -848,22 +848,26 @@ export default function App() {
         target.nodeDef.type === 'herb_patch' ||
         target.nodeDef.type === 'berry_bush' ||
         target.nodeDef.type === 'supply_crate';
+
+      const res = hitGatherNode(current, target.nodeDef);
       if (isPickupKind) {
-        const pickupHeight =
-          target.nodeDef.type === 'berry_bush'
-            ? 'bush'
-            : target.nodeDef.type === 'supply_crate'
-              ? 'waist'
-              : 'ground';
-        sceneRef.current?.triggerPickupAnimation(
-          new THREE.Vector3(target.nodeDef.x, target.nodeDef.y + 0.28, target.nodeDef.z),
-          pickupHeight
-        );
+        if (res.hit) {
+          const pickupHeight =
+            target.nodeDef.type === 'berry_bush'
+              ? 'bush'
+              : target.nodeDef.type === 'supply_crate'
+                ? 'waist'
+                : 'ground';
+          sceneRef.current?.triggerPickupAnimation(
+            new THREE.Vector3(target.nodeDef.x, target.nodeDef.y + 0.28, target.nodeDef.z),
+            pickupHeight,
+            target.nodeDef.id
+          );
+        }
       } else {
         sceneRef.current?.triggerToolSwing();
       }
 
-      const res = hitGatherNode(current, target.nodeDef);
       if (res.sound === 'chop') audio.playChop();
       else if (res.sound === 'mine') audio.playMine();
       else if (res.sound === 'pickup') audio.playPickup();
@@ -883,8 +887,14 @@ export default function App() {
         );
         sceneRef.current?.spawnHarvestDebris(
           res.sound === 'blocked' ? 'pickup' : res.sound,
-          new THREE.Vector3(target.nodeDef.x, target.nodeDef.y + 0.6, target.nodeDef.z)
+          new THREE.Vector3(
+            target.nodeDef.x,
+            target.nodeDef.y + (isPickupKind ? 0.22 : 0.6),
+            target.nodeDef.z
+          )
         );
+      } else if (res.sound === 'blocked' && !isPickupKind) {
+        sceneRef.current?.recordNodeInteraction(target.nodeDef.id, 'blocked', false);
       }
 
       if (res.granted && res.granted.length > 0) {

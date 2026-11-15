@@ -38,6 +38,7 @@ export class DanielCompanion3D {
   private readonly prevPos = new THREE.Vector3();
   private initializedPos = false;
   private currentYaw = 0;
+  private smoothSpeedMps = 0;
 
   constructor(scene: THREE.Scene, glbs: LoadedGLBSet) {
     this.root = SkeletonUtils.clone(glbs.companion.daniel) as THREE.Group;
@@ -136,6 +137,7 @@ export class DanielCompanion3D {
       }
     }
 
+    const safeDt = Math.min(0.05, Math.max(0.0005, dt));
     if (!this.initializedPos) {
       this.pos.set(targetX, targetY, targetZ);
       this.prevPos.copy(this.pos);
@@ -143,23 +145,31 @@ export class DanielCompanion3D {
       this.initializedPos = true;
     } else {
       this.prevPos.copy(this.pos);
-      const blend = Math.min(1, dt * (isSailing ? 18 : 10));
-      this.pos.x += (targetX - this.pos.x) * blend;
-      this.pos.y += (targetY - this.pos.y) * blend;
-      this.pos.z += (targetZ - this.pos.z) * blend;
+      if (Math.hypot(targetX - this.pos.x, targetZ - this.pos.z) > 14) {
+        this.pos.set(targetX, targetY, targetZ);
+        this.prevPos.copy(this.pos);
+        this.smoothSpeedMps = 0;
+      } else {
+        this.pos.x = THREE.MathUtils.damp(this.pos.x, targetX, isSailing ? 18 : 11, safeDt);
+        this.pos.y = THREE.MathUtils.damp(this.pos.y, targetY, isSailing ? 18 : 12, safeDt);
+        this.pos.z = THREE.MathUtils.damp(this.pos.z, targetZ, isSailing ? 18 : 11, safeDt);
+      }
 
       let yawDiff = targetYaw - this.currentYaw;
       while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
       while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
-      this.currentYaw += yawDiff * Math.min(1, dt * 9);
+      this.currentYaw += yawDiff * (1 - Math.exp(-9 * safeDt));
     }
 
     this.root.position.copy(this.pos);
     this.root.rotation.y = this.currentYaw;
 
-    const speedMps = dt > 0.0001
-      ? Math.hypot(this.pos.x - this.prevPos.x, this.pos.z - this.prevPos.z) / dt
-      : 0;
+    const instSpeedMps =
+      Math.hypot(this.pos.x - this.prevPos.x, this.pos.z - this.prevPos.z) / safeDt;
+    // Damped speed + small target-gap boost avoids clip ping-pong between 5 Hz sim ticks
+    const gapDist = Math.hypot(targetX - this.pos.x, targetZ - this.pos.z);
+    const effectiveSpeed = Math.max(instSpeedMps, gapDist > 0.22 ? Math.min(6, gapDist * 3.2) : 0);
+    this.smoothSpeedMps = THREE.MathUtils.damp(this.smoothSpeedMps, effectiveSpeed, 8.5, safeDt);
 
     let clip: DanielClipName = 'idle';
     if (d.downed) {
@@ -169,9 +179,9 @@ export class DanielCompanion3D {
     } else if (!d.found) {
       const distP = Math.hypot(playerPos.x - this.pos.x, playerPos.z - this.pos.z);
       clip = distP < 15 ? 'wave' : 'idle';
-    } else if (speedMps > 4.6) {
+    } else if (this.smoothSpeedMps > 4.4 || (this.activeClip === 'run' && this.smoothSpeedMps > 3.6)) {
       clip = 'run';
-    } else if (speedMps > 0.45) {
+    } else if (this.smoothSpeedMps > 0.42 || (this.activeClip === 'walk' && this.smoothSpeedMps > 0.24)) {
       clip = 'walk';
     } else if (d.command === 'gather') {
       clip = 'gather';
