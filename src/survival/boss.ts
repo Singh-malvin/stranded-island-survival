@@ -4,7 +4,7 @@
  * Aura-Dim stagger windows, checkpoints, fight timer, and "Dethroned the Aura King" unlock.
  */
 
-import { BOSS_TUNING, COMBAT_TUNING, NEEDS, TEMPERATURE, WORLD } from './config.ts';
+import { BOSS_TUNING, COMBAT_TUNING, NEEDS, TEMPERATURE } from './config.ts';
 import { addItem, countItem } from './items.ts';
 import type {
   BossCombatPhase,
@@ -362,9 +362,9 @@ export function retryBossFromCheckpoint(
     cpPhase === 3
       ? { x: 0, y: 1.5, z: -2.2, yaw: 0 }
       : {
-          x: WORLD.BOAT_DOCK_POS.x,
+          x: BOSS_TUNING.ARENA_CENTER_X - 1.6,
           y: 2.0,
-          z: WORLD.BOAT_DOCK_POS.z - 6.0,
+          z: BOSS_TUNING.ARENA_CENTER_Z + 7.2,
           yaw: 0,
         };
 

@@ -1549,12 +1549,14 @@ describe('Final Boss Showdown — The Aura King, Weapons, Save Migration & Check
     assert.ok(barrelRes.dealt > 0);
     s = barrelRes.state;
 
-    // Checkpoint retry restores alive state & keeps reached checkpoint phase
+    // Checkpoint retry restores alive state, places player at Shore Sanctum & keeps reached checkpoint phase
     const deadPhase2 = { ...s, alive: false, needs: { ...s.needs, health: 0 } };
     const retriedPhase2 = retryBossFromCheckpoint(deadPhase2, false);
     assert.equal(retriedPhase2.alive, true);
     assert.equal(retriedPhase2.boss.phase, 2);
     assert.equal(retriedPhase2.needs.health, 100);
+    assert.equal(retriedPhase2.player.x, BOSS_TUNING.ARENA_CENTER_X - 1.6);
+    assert.equal(retriedPhase2.player.z, BOSS_TUNING.ARENA_CENTER_Z + 7.2);
 
     const restartedPhase1 = retryBossFromCheckpoint(deadPhase2, true);
     assert.equal(restartedPhase1.boss.phase, 1);

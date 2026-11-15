@@ -1101,6 +1101,12 @@ export class BossAuraKing3D {
     this.slamCooldown -= effDt * rate;
     this.dashCooldown -= effDt * rate;
 
+    if (bossState.staggeredSec > 0 && this.bossAiState !== 'stagger') {
+      this.bossAiState = 'stagger';
+      this.aiTimer = Math.max(0.85, bossState.staggeredSec);
+      this.playClip('stagger', 0.14, true);
+    }
+
     if (this.bossAiState === 'stagger') {
       this.aiTimer -= effDt;
       this.playClip('stagger', 0.16, true);

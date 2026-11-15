@@ -878,15 +878,28 @@ export default function App() {
       onDetonateBarrel: (idx, bossDistM) => {
         if (idx < 0 || idx > 3) return;
         setGameState((prev) => {
+          const prevPhase = prev.boss.combatPhase;
           const res = detonateBossBarrel(prev, idx as 0 | 1 | 2 | 3, bossDistM);
           if (res.exploded) {
-            queueMicrotask(() =>
+            queueMicrotask(() => {
               showStatus(
                 res.hitBoss
                   ? `Fuel Barrel Detonated! (-${res.dealt} HP & Staggered The Aura King!)`
                   : 'Flight 404 Fuel Barrel detonated!'
-              )
-            );
+              );
+              const nextPhase = res.state.boss.combatPhase;
+              if (res.defeatedNow) {
+                audio.setBossMusicState(true, 'victory');
+                showStatus('FINAL BLOW! The Aura King shatters into golden dawn!');
+              } else if (nextPhase === 'phase3_transition' && prevPhase !== 'phase3_transition') {
+                audio.setBossMusicState(true, 3);
+                sceneRef.current?.teleportToBossArena(3);
+                showStatus('Phase 3: Final Storm Showdown aboard your Escape Boat!');
+              } else if (nextPhase === 'phase2_cutscene' && prevPhase !== 'phase2_cutscene') {
+                audio.setBossMusicState(true, 2);
+                showStatus('Phase 2: Shatter the 3 glowing Aura Crystals to break his shield!');
+              }
+            });
           }
           return res.state;
         });
@@ -1732,6 +1745,7 @@ export default function App() {
     cancelBuildMode();
     setJournalTab(null);
     setIsPaused(false);
+    sceneRef.current?.skipPlaneCrashIntro();
     commitAndSave(started, 'autosave', 'Boss Showdown');
     audio.setBossMusicState(true, 1);
     sceneRef.current?.teleportToBossArena(1);
