@@ -13,7 +13,10 @@ export type ToolKind =
   | 'lantern'
   | 'bow'
   | 'flare_gun'
-  | 'fire_bomb';
+  | 'fire_bomb'
+  | 'aura_rifle'
+  | 'harpoon_gun'
+  | 'lockpick';
 export type CraftTier = 1 | 2 | 3; // 1 Primitive, 2 Improved, 3 Advanced
 export type CraftStation = 'hands' | 'campfire' | 'workbench' | 'forge';
 
@@ -95,6 +98,12 @@ export type ItemId =
   | 'fire_bomb'
   | 'flare_gun'
   | 'flare_ammo'
+  | 'aura_rifle'
+  | 'rifle_ammo'
+  | 'harpoon_gun'
+  | 'harpoon_bolt'
+  | 'lockpick'
+  | 'aura_shard'
   // Placeables
   | 'campfire_kit'
   | 'shelter_kit';
@@ -445,9 +454,126 @@ export interface PlacedStructure {
   forgeQueue?: ForgeQueueState;
 }
 
+// ---------------------------------------------------------------------------
+// NON-LINEAR STORY, DANIEL COMPANION, POWERS, STRONGHOLD HEIST & PRISON
+// ---------------------------------------------------------------------------
+
+export type StoryPhase =
+  | 'alone'
+  | 'found_daniel'
+  | 'boat_attempted'
+  | 'preparing'
+  | 'final_boat_chase'
+  | 'escaped';
+
+export interface OpenGoal {
+  id: string;
+  title: string;
+  subtitle: string;
+  routes: string[];
+  completed: boolean;
+  optional?: boolean;
+}
+
+export type DanielCommand =
+  | 'follow'
+  | 'wait'
+  | 'gather'
+  | 'guard'
+  | 'build'
+  | 'attack'
+  | 'goto';
+
+export interface DanielState {
+  found: boolean;
+  trust: number; // 0-100
+  treatsGiven: number;
+  neglectedCount: number;
+  health: number;
+  maxHealth: number;
+  hunger: number;
+  thirst: number;
+  downed: boolean;
+  command: DanielCommand;
+  targetPos: { x: number; z: number } | null;
+  guardCenter: { x: number; z: number } | null;
+  x: number;
+  y: number;
+  z: number;
+  yaw: number;
+  moodText: string | null;
+  loreUnlockedTier: number; // 0..4
+  inRescueCooldownSec: number;
+}
+
+export type PowerId = 'aura_ward' | 'tempest_dash' | 'sovereign_cleave' | 'aura_sight';
+
+export interface PowersState {
+  unlocked: PowerId[];
+  cooldowns: Record<PowerId, number>;
+  activeAuraSightSec: number;
+}
+
+export type AuraAwarenessState = 'unaware' | 'suspicious' | 'hunting' | 'catching';
+
+export interface AuraGuardState {
+  id: string;
+  x: number;
+  z: number;
+  yaw: number;
+  patrolA: { x: number; z: number };
+  patrolB: { x: number; z: number };
+  hp: number;
+  maxHp: number;
+  alert: number; // 0-100
+  downedUntilHour: number | null;
+}
+
+export interface AuraKingAIState {
+  awareness: AuraAwarenessState;
+  suspicion: number; // 0-100
+  x: number;
+  z: number;
+  yaw: number;
+  patrolIndex: number;
+  lastKnownPlayerPos: { x: number; z: number } | null;
+  huntTimerSec: number;
+  provokedByTheftCount: number;
+  lastSightingHour: number | null;
+}
+
+export interface StrongholdState {
+  alertLevel: number; // 0-100
+  highAlertUntilHour: number | null;
+  stolenRifle: boolean;
+  stolenHarpoon: boolean;
+  stolenShards: number;
+  guards: AuraGuardState[];
+}
+
+export type PrisonEscapePath = 'lockpick' | 'vent_sneak' | 'daniel_rescue' | 'fight_out';
+
+export interface PrisonState {
+  inPrison: boolean;
+  capturedCount: number;
+  escapedPathsUsed: PrisonEscapePath[];
+  confiscatedItems: (InventorySlot | null)[];
+  lockerRecovered: boolean;
+  escapeHoursElapsed: number;
+}
+
+export interface JournalEntry {
+  id: string;
+  category: 'discovery' | 'location' | 'daniel' | 'aura_king' | 'heist';
+  title: string;
+  detail: string;
+  day: number;
+}
+
 export interface SurvivalState {
   version: number;
   act: 1 | 2 | 3 | 4 | 5;
+  storyPhase: StoryPhase;
   difficulty: 'survivor' | 'hardcore';
   needs: Needs;
   alive: boolean;
@@ -467,6 +593,12 @@ export interface SurvivalState {
   voyage: VoyageState;
   bossDifficulty: BossDifficulty;
   boss: BossEncounterState;
+  companion: DanielState;
+  powers: PowersState;
+  auraKingAI: AuraKingAIState;
+  stronghold: StrongholdState;
+  prison: PrisonState;
+  journalEntries: JournalEntry[];
   achievements: string[];
   escapedCity: boolean;
   escapedAtDay?: number;

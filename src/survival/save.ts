@@ -3,6 +3,13 @@
 
 import { INVENTORY, NEEDS, SAVE, TEMPERATURE, TIME, WORLD } from './config.ts';
 import { createInitialBossState, normalizeBossState } from './boss.ts';
+import { normalizeDanielState } from './companion.ts';
+import { normalizePowersState } from './powers.ts';
+import {
+  normalizeAuraKingAIState,
+  normalizePrisonState,
+  normalizeStrongholdState,
+} from './auraAI.ts';
 import { tickNodeRespawns } from './gathering.ts';
 import { stepWeather } from './needs.ts';
 import { tickStructuresProduction } from './structures.ts';
@@ -137,6 +144,13 @@ export function parseAndMigrateSave(rawJson: string): SurvivalState | null {
         parsed.bossDifficulty === 'easy' || parsed.bossDifficulty === 'hard'
           ? parsed.bossDifficulty
           : 'normal',
+      storyPhase: parsed.storyPhase ?? (parsed.escapedCity ? 'escaped' : parsed.flags?.boat1_destroyed ? 'preparing' : 'alone'),
+      companion: normalizeDanielState(parsed.companion),
+      powers: normalizePowersState(parsed.powers),
+      auraKingAI: normalizeAuraKingAIState(parsed.auraKingAI),
+      stronghold: normalizeStrongholdState(parsed.stronghold),
+      prison: normalizePrisonState(parsed.prison),
+      journalEntries: Array.isArray(parsed.journalEntries) ? parsed.journalEntries : [],
       boss: parsed.boss
         ? normalizeBossState(
             parsed.boss,

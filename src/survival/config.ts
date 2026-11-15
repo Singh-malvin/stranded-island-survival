@@ -203,6 +203,9 @@ export const TOOL_DURABILITY: Record<string, number> = {
   machete: 150,
   climbing_gear: 12,
   river_raft: 12,
+  aura_rifle: 80,
+  harpoon_gun: 60,
+  lockpick: 4,
 };
 export const TORCH_BURN_REAL_SEC = 240;
 export const LANTERN_BURN_REAL_SEC = 900;
@@ -893,6 +896,8 @@ export const COMBAT_TUNING = {
   ARROW_GRAVITY_MPS2: 8.6,
   FIRE_BOMB_SPEED_MPS: 21.0,
   FLARE_SPEED_MPS: 56.0,
+  AURA_RIFLE_SPEED_MPS: 78.0,
+  HARPOON_SPEED_MPS: 54.0,
   SPEAR_THROW_SPEED_MPS: 24.0,
 
   /** Base damage by equipped item id. */
@@ -909,7 +914,118 @@ export const COMBAT_TUNING = {
     bow_full: 48,
     fire_bomb: 95,
     flare_gun: 130,
+    aura_rifle: 84,
+    harpoon_gun: 112,
+    lockpick: 6,
   } as const,
+} as const;
+
+// ---------------------------------------------------------------------------
+// NON-LINEAR STORY: DANIEL COMPANION, POWERS, STRONGHOLD HEIST & PRISON
+// ---------------------------------------------------------------------------
+export const COMPANION_TUNING = {
+  SPAWN_POS: { x: -75, z: -46 }, // Deep inside Western Basalt Caves
+  START_TRUST: 22,
+  TRUST_FEED_DELTA: 16,
+  TRUST_WATER_DELTA: 14,
+  TRUST_HEAL_DELTA: 22,
+  TRUST_TALK_DELTA: 6,
+  TRUST_NEGLECT_DELTA: -10,
+  TRUST_HARM_DELTA: -22,
+  HIGH_TRUST_THRESHOLD: 65,
+  RESCUE_TRUST_THRESHOLD: 50,
+  FOLLOW_MIN_DIST_M: 3.2,
+  FOLLOW_MAX_TELEPORT_M: 46,
+  WALK_SPEED_MPS: 4.4,
+  RUN_SPEED_MPS: 6.8,
+  GATHER_INTERVAL_SEC: 14,
+  GUARD_RADIUS_M: 12,
+  ATTACK_DAMAGE: 18,
+  ATTACK_COOLDOWN_SEC: 1.35,
+  MAX_HEALTH: 120,
+  HUNGER_DRAIN_PER_HOUR: 3.2,
+  THIRST_DRAIN_PER_HOUR: 4.2,
+  BOAT_REBUILD_SPEED_MULT: 1.75,
+} as const;
+
+export const POWER_TUNING = {
+  SHRINES: [
+    {
+      id: 'aura_ward' as const,
+      name: 'Shrine of the Aura Ward',
+      description: 'Absorbs 35% incoming Aura & lightning damage permanently.',
+      x: 52,
+      z: 36,
+      requirementText: 'Open to any survivor — commune at the eastern coastal overlook shrine.',
+    },
+    {
+      id: 'tempest_dash' as const,
+      name: 'Shrine of Tempest Dash',
+      description: 'Empowers [Q] Dodge with longer shadow-step lunge & extended invulnerability.',
+      x: -54,
+      z: 22,
+      requirementText: 'Traverse the wet mist cliffs west of the freshwater valley.',
+    },
+    {
+      id: 'sovereign_cleave' as const,
+      name: 'Shrine of Sovereign Cleave',
+      description: 'Press [K] to unleash a golden shockwave breaking Aura guards & shattering shields.',
+      x: 74,
+      z: -60,
+      requirementText: 'Offer 1x Aura Shard OR solve the Ancient Ruins alignment.',
+    },
+    {
+      id: 'aura_sight' as const,
+      name: 'Shrine of Aura Sight',
+      description: 'Press [T] to sense The Aura King & patrolling Shades through jungle and walls.',
+      x: -76,
+      z: -54,
+      requirementText: 'Deep within Western Basalt Caves beyond Daniel’s shelter.',
+    },
+  ],
+  AURA_WARD_DAMAGE_MULT: 0.65,
+  TEMPEST_DASH_SPEED_MULT: 1.42,
+  TEMPEST_DASH_IFRAME_MULT: 1.5,
+  CLEAVE_COOLDOWN_SEC: 10.0,
+  CLEAVE_RADIUS_M: 7.5,
+  CLEAVE_DAMAGE: 56,
+  SIGHT_DURATION_SEC: 14.0,
+  SIGHT_COOLDOWN_SEC: 18.0,
+} as const;
+
+export const AURA_AI_TUNING = {
+  PATROL_WAYPOINTS: [
+    { x: -16, z: -102 }, // Caldera Stronghold courtyard
+    { x: 46, z: -64 },   // Eastern ruins ridge
+    { x: 18, z: -14 },   // Central valley high crest
+    { x: -58, z: -26 },  // Outer cave ravine overlook
+    { x: -120, z: -38 }, // Western cliff shelf
+  ],
+  PATROL_SPEED_MPS: 3.4,
+  HUNT_SPEED_MPS: 5.8,
+  BASE_DETECT_RADIUS_M: 28,
+  GUARD_VISION_RANGE_M: 18,
+  GUARD_VISION_FOV_COS: 0.45, // ~63 deg half cone
+  CROUCH_VISIBILITY_MULT: 0.48,
+  PRONE_VISIBILITY_MULT: 0.24,
+  NIGHT_VISIBILITY_MULT: 0.58,
+  STORM_VISIBILITY_MULT: 0.65,
+  CAMPFIRE_BEACON_MULT: 1.45,
+  THEFT_SUSPICION_SPIKE: 68,
+  CATCH_RADIUS_M: 3.2,
+  PATROL_RESPAWN_HOURS: 6,
+} as const;
+
+export const PRISON_TUNING = {
+  /** Stronghold coordinates align with stronghold_citadel.glb at RESEARCH_STATION_POS (-16, -112) */
+  STRONGHOLD_POS: { x: -16, z: -112 },
+  CELL_WORLD_POS: { x: -23.5, z: -115.5 },
+  LOCKER_WORLD_POS: { x: -20.2, z: -114.6 },
+  VENT_EXIT_WORLD_POS: { x: -27.8, z: -117.2 },
+  ARMORY_RIFLE_POS: { x: -9.5, z: -108.8 },
+  ARMORY_HARPOON_POS: { x: -9.5, z: -112.2 },
+  DANIEL_RESCUE_HOURS_WAIT: 2.0,
+  HIGH_ALERT_DURATION_HOURS: 8.0,
 } as const;
 
 // ---------------------------------------------------------------------------

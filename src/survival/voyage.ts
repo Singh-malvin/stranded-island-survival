@@ -1,7 +1,8 @@
 // Pure Stage 6 Boat Building (Act 4) & Sea Voyage / City Arrival simulation (Act 5).
 // No Three.js or React imports.
 
-import { BOAT, DIFFICULTY, TEMPERATURE, TIME, VOYAGE } from './config.ts';
+import { BOAT, COMPANION_TUNING, DIFFICULTY, TEMPERATURE, TIME, VOYAGE, WORLD } from './config.ts';
+import { startFinalSeaChase } from './boss.ts';
 import { addItem, countItem, ITEM_DEFS, removeItem } from './items.ts';
 import type {
   BoatBuildState,
@@ -228,16 +229,33 @@ function consumeSeaRations(
   return { ok: remNeeded === 0, inventory: remNeeded === 0 ? updated : inventory };
 }
 
+export function isDanielAssistingBoat(state: SurvivalState): boolean {
+  return Boolean(
+    state.companion.found &&
+      !state.companion.downed &&
+      state.companion.trust >= 45 &&
+      state.companion.command === 'build'
+  );
+}
+
+function getEffectiveStageIngredients(
+  state: SurvivalState,
+  stageId: BoatStageId
+): RecipeIngredient[] {
+  const def = BOAT_STAGE_DEFS[stageId];
+  const discount = isDanielAssistingBoat(state) ? 1 : 0;
+  if (discount === 0) return def.ingredients;
+  return def.ingredients.map((ing) => ({
+    itemId: ing.itemId,
+    count: ing.count >= 4 ? ing.count - 2 : ing.count >= 2 ? ing.count - 1 : ing.count,
+  }));
+}
+
 export function canBuildBoatStage(
   state: SurvivalState,
   stageId: BoatStageId
 ): { ok: boolean; reason?: string } {
-  if (state.act < 4) {
-    return {
-      ok: false,
-      reason: 'Calibrate Station 3 Radio, Generator & Sea Chart first (Act 3) to plot offshore assembly.',
-    };
-  }
+  // Non-linear: Boat can be built anytime materials are gathered without rigid Act gates.
   if (state.boat[stageId]) {
     return { ok: false, reason: 'Stage already completed.' };
   }
@@ -252,8 +270,9 @@ export function canBuildBoatStage(
   }
 
   const def = BOAT_STAGE_DEFS[stageId];
+  const reqs = getEffectiveStageIngredients(state, stageId);
   const missing: string[] = [];
-  for (const ing of def.ingredients) {
+  for (const ing of reqs) {
     const have = countItem(state.inventory, ing.itemId);
     if (have < ing.count) {
       missing.push(`${ing.count - have}x ${ITEM_DEFS[ing.itemId].name}`);
@@ -282,8 +301,10 @@ export function buildBoatStage(
   }
 
   const def = BOAT_STAGE_DEFS[stageId];
+  const reqs = getEffectiveStageIngredients(state, stageId);
+  const danielHelps = isDanielAssistingBoat(state);
   let inv = state.inventory;
-  for (const ing of def.ingredients) {
+  for (const ing of reqs) {
     const res = removeItem(inv, ing.itemId, ing.count);
     if (!res.success) {
       return { ok: false, state, message: 'Missing boat building materials.' };
@@ -299,8 +320,11 @@ export function buildBoatStage(
     inv = ratRes.inventory;
   }
 
-  const nextTotalHours = state.clock.totalHours + BOAT.STAGE_BUILD_HOURS;
-  const nextHourRaw = state.clock.hour + BOAT.STAGE_BUILD_HOURS;
+  const buildHours = danielHelps
+    ? BOAT.STAGE_BUILD_HOURS / COMPANION_TUNING.BOAT_REBUILD_SPEED_MULT
+    : BOAT.STAGE_BUILD_HOURS;
+  const nextTotalHours = state.clock.totalHours + buildHours;
+  const nextHourRaw = state.clock.hour + buildHours;
   const dayBump = Math.floor(nextHourRaw / 24);
   const nextClock = {
     day: state.clock.day + dayBump,
@@ -332,37 +356,132 @@ export function buildBoatStage(
     },
     message:
       completeCount === 4
-        ? `${def.name} complete! Escape vessel is seaworthy — Cast Off from the Dock when ready!`
-        : `Completed Stage ${def.stageNumber}/4: ${def.name}.`,
+        ? `${def.name} complete!${danielHelps ? ' (Daniel sped up the assembly!)' : ''} Cast Off when ready!`
+        : `Completed Stage ${def.stageNumber}/4: ${def.name}${danielHelps ? ' (Fast Assist)' : ''}.`,
+  };
+}
+
+/**
+ * Fixed Event #2: When attempting to sail off the island on Boat #1,
+ * The Aura King splits the sky with violet lightning, shatters Boat #1's rigging & engine
+ * (leaving the keel intact to salvage), and casts the survivors back onto the beach.
+ */
+export function triggerFirstBoatDestruction(state: SurvivalState): SurvivalState {
+  const beachPos = {
+    x: WORLD.BOAT_DOCK_POS.x + 2.5,
+    y: 1.5,
+    z: WORLD.BOAT_DOCK_POS.z - 5.5,
+    yaw: 0,
+  };
+
+  // If the player never found Daniel earlier, the storm washes them ashore together
+  const nextCompanion = state.companion.found
+    ? {
+        ...state.companion,
+        downed: false,
+        x: beachPos.x + 2.8,
+        z: beachPos.z + 0.8,
+        moodText:
+          'That wasn’t a storm... He broke the mast clean in half! We can’t run on brute planks alone — get stronger first.',
+      }
+    : {
+        ...state.companion,
+        found: true,
+        trust: Math.max(state.companion.trust, 32),
+        x: beachPos.x + 2.8,
+        z: beachPos.z + 0.8,
+        moodText:
+          'Wait—grab my hand! You tried punching through his reef blockade too? Name’s Daniel. Let’s regroup.',
+      };
+
+  const entryId = 'boat1_shattered_event';
+  const nextEntries = state.journalEntries.some((e) => e.id === entryId)
+    ? state.journalEntries
+    : [
+        ...state.journalEntries,
+        {
+          id: entryId,
+          category: 'aura_king' as const,
+          title: 'Boat #1 Shattered at the Storm Blockade',
+          detail:
+            'The Aura King annihilated our first escape boat with purple-gold lightning right beyond the surf. Salvageable hull remains at the dock. Before trying Boat #2, get strong enough: awaken Relic Shrines, craft rare gear or heist the Stronghold Armory, and work with Daniel.',
+          day: state.clock.day,
+        },
+      ];
+
+  return {
+    ...state,
+    storyPhase: 'preparing',
+    weather: { kind: 'storm', rain: 0.72, wind: 0.82 },
+    needs: {
+      ...state.needs,
+      health: Math.max(28, state.needs.health - 24),
+      wetness: 85,
+    },
+    player: beachPos,
+    companion: nextCompanion,
+    boat: {
+      keel_hull: true, // salvaged keel so Boat #2 repairs faster!
+      mast_sail: false,
+      outboard_engine: false,
+      nav_provisions: false,
+    },
+    voyage: {
+      ...createInitialVoyageState(),
+      phase: 'docked',
+      hullIntegrity: 35,
+      seaEventText: 'Boat #1 shattered by the Aura King! Keel salvaged on the slipway — prepare before trying Boat #2.',
+    },
+    journalEntries: nextEntries,
+    flags: {
+      ...state.flags,
+      boat1_destroyed: true,
+      boat_attempted: true,
+    },
   };
 }
 
 export function launchEscapeVoyage(
   state: SurvivalState
-): { ok: boolean; state: SurvivalState; message: string } {
-  if (state.act < 4) {
-    return { ok: false, state, message: 'Activate Station 3 Sea Chart before casting off.' };
-  }
+): { ok: boolean; state: SurvivalState; message: string; triggeredBoat1Destruction?: boolean } {
   if (!isBoatReadyToLaunch(state.boat)) {
     return {
       ok: false,
       state,
-      message: 'Finish all 4 Boat Slipway stages before setting sail for Port Solis.',
+      message: 'Finish all 4 Boat Slipway stages before setting sail.',
     };
   }
 
+  // Fixed Event #2: First escape attempt ends with Boat #1 shattered at the glowing storm reef!
+  if (!state.flags.boat1_destroyed) {
+    const wreckedState = triggerFirstBoatDestruction(state);
+    return {
+      ok: true,
+      triggeredBoat1Destruction: true,
+      state: wreckedState,
+      message:
+        'A violet-gold thunderbolt splits Boat #1 at the reef! You wash back ashore alongside Daniel — get stronger first before rebuilding Boat #2.',
+    };
+  }
+
+  // Fixed Event #3: Rebuilt Boat #2 launches into the Final Sea Chase with Daniel helming!
+  const chaseState = startFinalSeaChase(state, state.bossDifficulty ?? 'normal');
   return {
     ok: true,
+    triggeredBoat1Destruction: false,
     state: {
-      ...state,
+      ...chaseState,
       voyage: {
         ...createInitialVoyageState(),
         phase: 'sailing',
         throttle: 'sail',
-        seaEventText: 'Cleared the southern reef! Holding course North-East toward Shoal Cay.',
+        hullIntegrity: 100,
+        seaEventText:
+          'Daniel holds the helm across gale-force swells! Break the Aura King’s storm chase at the outer reef!',
       },
     },
-    message: 'Cast off! Steer through offshore squalls and anchor at islets along the 12 nm route.',
+    message:
+      'Boat #2 clears the slipway with Daniel helming! Hold the deck and shatter The Aura King!',
   };
 }
 

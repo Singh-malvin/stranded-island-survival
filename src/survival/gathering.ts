@@ -13,6 +13,13 @@ import {
   WORLD,
 } from './config.ts';
 import { createInitialBossState } from './boss.ts';
+import { createInitialDanielState } from './companion.ts';
+import { createInitialPowersState } from './powers.ts';
+import {
+  createInitialAuraKingAIState,
+  createInitialPrisonState,
+  createInitialStrongholdState,
+} from './auraAI.ts';
 import {
   addItem,
   createEmptyInventory,
@@ -605,6 +612,7 @@ export function createInitialSurvivalState(
   return {
     version: SAVE.VERSION,
     act: 1,
+    storyPhase: 'alone',
     difficulty,
     needs: {
       health: NEEDS.START.health,
@@ -640,6 +648,12 @@ export function createInitialSurvivalState(
     voyage: createInitialVoyageState(),
     bossDifficulty: 'normal',
     boss: createInitialBossState('normal'),
+    companion: createInitialDanielState(),
+    powers: createInitialPowersState(),
+    auraKingAI: createInitialAuraKingAIState(),
+    stronghold: createInitialStrongholdState(),
+    prison: createInitialPrisonState(),
+    journalEntries: [],
     achievements: [],
     escapedCity: false,
     discoveredCells: revealMapAround([], spawnX, spawnZ),

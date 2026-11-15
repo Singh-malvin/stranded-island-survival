@@ -487,6 +487,66 @@ export const ITEM_DEFS: Record<ItemId, ItemDef> = {
     stack: 12,
     loseOnDeath: false,
   },
+  aura_rifle: {
+    id: 'aura_rifle',
+    name: 'Aura-Infused Rifle',
+    category: 'tool',
+    description:
+      'Prototype Aura-coil carbine confiscated by the Aura King inside the Northern Stronghold Armory. Fires hyper-velocity amethyst bolts.',
+    icon: '🪄',
+    stack: 1,
+    tool: { kind: 'aura_rifle', tier: 3 },
+    loseOnDeath: false,
+  },
+  rifle_ammo: {
+    id: 'rifle_ammo',
+    name: 'Aura Capacitor Cell',
+    category: 'resource',
+    description: 'Charged crystal ammunition for the Aura-Infused Rifle.',
+    icon: '🔋',
+    stack: 24,
+    loseOnDeath: false,
+  },
+  harpoon_gun: {
+    id: 'harpoon_gun',
+    name: 'Pneumatic Harpoon Gun',
+    category: 'tool',
+    description:
+      'Heavy maritime launcher forged or stolen from the Stronghold Armory. Punches straight through storm shields and Aura armor.',
+    icon: '⚓',
+    stack: 1,
+    tool: { kind: 'harpoon_gun', tier: 3 },
+    loseOnDeath: false,
+  },
+  harpoon_bolt: {
+    id: 'harpoon_bolt',
+    name: 'Barbed Steel Harpoon',
+    category: 'resource',
+    description: 'Heavy steel harpoon bolt loaded by the Pneumatic Harpoon Gun.',
+    icon: '🔱',
+    stack: 16,
+    loseOnDeath: false,
+  },
+  lockpick: {
+    id: 'lockpick',
+    name: 'Spring-Steel Lockpick',
+    category: 'tool',
+    description:
+      'Fine picks forged from scrap metal. Opens locked Stronghold Dungeon doors and Armory cabinets without raising noise.',
+    icon: '🗝️',
+    stack: 4,
+    tool: { kind: 'lockpick', tier: 2 },
+    loseOnDeath: false,
+  },
+  aura_shard: {
+    id: 'aura_shard',
+    name: 'Condensed Aura Shard',
+    category: 'resource',
+    description: 'Vibrant purple-gold crystal harvested near ruins, caves, or dropped by defeated Aura Shades.',
+    icon: '🔮',
+    stack: 12,
+    loseOnDeath: false,
+  },
 
   // --- Placeable kits ---
   campfire_kit: {

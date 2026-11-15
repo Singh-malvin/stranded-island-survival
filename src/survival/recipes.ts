@@ -412,6 +412,68 @@ export const RECIPES: Recipe[] = [
     ],
     description: 'High-luminance signal rounds capable of disrupting Aura defenses.',
   },
+  {
+    id: 'lockpick',
+    name: 'Spring-Steel Lockpick',
+    tier: 2,
+    station: 'workbench',
+    result: { itemId: 'lockpick', count: 2 },
+    ingredients: [
+      { itemId: 'scrap_metal', count: 1 },
+      { itemId: 'copper_wire', count: 1 },
+    ],
+    description: 'Quiet tension picks for slipping Stronghold locks and jail cells.',
+  },
+  {
+    id: 'harpoon_gun',
+    name: 'Pneumatic Harpoon Gun',
+    tier: 3,
+    station: 'forge',
+    result: { itemId: 'harpoon_gun', count: 1 },
+    ingredients: [
+      { itemId: 'metal_ingot', count: 3 },
+      { itemId: 'copper_wire', count: 2 },
+      { itemId: 'rope', count: 3 },
+    ],
+    description: 'High-impact maritime harpoon launcher built to pierce Aura guards and chase threats.',
+  },
+  {
+    id: 'harpoon_bolt',
+    name: 'Barbed Harpoon Bolts (x4)',
+    tier: 3,
+    station: 'workbench',
+    result: { itemId: 'harpoon_bolt', count: 4 },
+    ingredients: [
+      { itemId: 'metal_ingot', count: 1 },
+      { itemId: 'stick', count: 2 },
+    ],
+    description: 'Machined steel harpoons.',
+  },
+  {
+    id: 'aura_rifle_craft',
+    name: 'Aura-Infused Rifle',
+    tier: 3,
+    station: 'forge',
+    result: { itemId: 'aura_rifle', count: 1 },
+    ingredients: [
+      { itemId: 'circuit_board', count: 1 },
+      { itemId: 'metal_ingot', count: 3 },
+      { itemId: 'aura_shard', count: 2 },
+    ],
+    description: 'Channel island Aura Crystals through salvaged avionics barrels — OR steal one in the Stronghold Armory.',
+  },
+  {
+    id: 'rifle_ammo_craft',
+    name: 'Aura Capacitor Cells (x6)',
+    tier: 3,
+    station: 'workbench',
+    result: { itemId: 'rifle_ammo', count: 6 },
+    ingredients: [
+      { itemId: 'aura_shard', count: 1 },
+      { itemId: 'copper_wire', count: 1 },
+    ],
+    description: 'Recharge Aura Rifle crystal bolts.',
+  },
 ];
 
 export function checkRecipeAvailability(

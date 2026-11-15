@@ -4,10 +4,13 @@
 import { VOYAGE, WORLD } from './config.ts';
 import { addItem, countItem, ITEM_DEFS, removeItem } from './items.ts';
 import type {
+  JournalEntry,
   ObjectiveStep,
+  OpenGoal,
   RecipeIngredient,
   StationRepairId,
   StoryClueDef,
+  StoryPhase,
   SurvivalState,
 } from './types.ts';
 import { BOAT_STAGE_DEFS } from './voyage.ts';
@@ -192,10 +195,22 @@ export function discoverClue(
     }
   }
 
+  const clueEntry: JournalEntry = {
+    id: `clue_${clue.id}`,
+    category: 'discovery',
+    title: clue.title,
+    detail: clue.summary,
+    day: state.clock.day,
+  };
+  const nextEntries = state.journalEntries.some((e) => e.id === clueEntry.id)
+    ? state.journalEntries
+    : [...state.journalEntries, clueEntry];
+
   const nextState: SurvivalState = {
     ...state,
     inventory: nextInventory,
     cluesFound: [...state.cluesFound, clueId],
+    journalEntries: nextEntries,
   };
 
   return {
@@ -576,29 +591,125 @@ export function evaluateAct5Objectives(state: SurvivalState): ObjectiveStep[] {
   ];
 }
 
-export function evaluateObjectivesForAct(
-  state: SurvivalState,
-  act: SurvivalState['act'] = state.act
-): ObjectiveStep[] {
-  if (act <= 1) return evaluateAct1Objectives(state);
-  if (act === 2) return evaluateAct2Objectives(state);
-  if (act === 3) return evaluateAct3Objectives(state);
-  if (act === 4) return evaluateAct4Objectives(state);
-  return evaluateAct5Objectives(state);
+/**
+ * Open, non-linear Goals for the player-driven story: gives direction & optional routes
+ * without forcing fixed steps or locking progression behind one quest line.
+ */
+export function evaluateOpenGoals(state: SurvivalState): OpenGoal[] {
+  const boat1Done = Boolean(state.flags?.boat1_destroyed);
+  const boatStages = [
+    state.boat.keel_hull,
+    state.boat.mast_sail,
+    state.boat.outboard_engine,
+    state.boat.nav_provisions,
+  ].filter(Boolean).length;
+  const powerCount = state.powers.unlocked.length;
+  const hasHighGear =
+    countItem(state.inventory, 'aura_rifle') > 0 ||
+    countItem(state.inventory, 'harpoon_gun') > 0 ||
+    countItem(state.inventory, 'flare_gun') > 0 ||
+    countItem(state.inventory, 'bow') > 0;
+  const bossDone = Boolean(state.boss?.defeated || state.flags?.boss_lavans_defeated);
+
+  const goals: OpenGoal[] = [
+    {
+      id: 'goal_survive_clues',
+      title: 'Survive & Follow Signs of Life',
+      subtitle:
+        'Gather tools, build fire/shelter, and investigate the footprint trail & distant cave light toward Western Basalt Caves.',
+      routes: [
+        'Inspect Flight 404 wreckage for supplies or salvageable avionics',
+        'Follow footprints west toward the Basalt Caves (another survivor lives inside)',
+        'Explore the island freely by day or use darkness for stealth',
+      ],
+      completed: state.companion.found || boat1Done || state.escapedCity,
+    },
+    {
+      id: 'goal_daniel_bond',
+      title: 'Daniel (Cave Survivor) — Ally or Lone Wolf',
+      subtitle: state.companion.found
+        ? `Trust ${state.companion.trust}/100 • Hold [G] for Command Wheel. Treating injuries & sharing food unlocks Stronghold intel and faster boat work.`
+        : 'Someone left muddy tracks and smoke near the Western Caves. How you treat them changes what comes next.',
+      routes: [
+        'Share cooked food, clean water, or medicinal poultices to gain Trust',
+        'Order Daniel via Hold [G]: Follow, Gather, Guard Area, Help Build, or Attack',
+        'Neglecting or pushing him away keeps him guarded and limits help',
+      ],
+      completed: state.companion.found && state.companion.trust >= 60,
+      optional: true,
+    },
+  ];
+
+  if (!boat1Done) {
+    goals.push({
+      id: 'goal_first_escape',
+      title: 'Find a Way Off the Island',
+      subtitle: `Assemble Boat #1 at the Southern Slipway Dock (${boatStages}/4 stages) whenever you gather the timber, cloth, metal, and provisions.`,
+      routes: [
+        'No fixed path required — gather resources or repair Caldera hardware to locate parts',
+        'Launch Boat #1 when ready to test the Aura King’s reef blockade',
+      ],
+      completed: boat1Done || state.escapedCity,
+    });
+  } else {
+    goals.push({
+      id: 'goal_get_stronger',
+      title: 'Get Strong Enough to Challenge the Aura King',
+      subtitle: `After Boat #1 was shattered at the blockade, prepare your way: ${powerCount}/4 Relic Powers awakened • Stronghold Armory ${state.stronghold.stolenRifle || state.stronghold.stolenHarpoon ? 'Raided' : 'Untouched'}.`,
+      routes: [
+        'Explore Island Relic Shrines in any order (Aura Ward, Tempest Dash, Sovereign Cleave, Aura Sight)',
+        'Craft tier-3 weapons at a Forge OR sneak/steal the Aura Rifle & Harpoon Gun from Northern Stronghold',
+        'Build Trust with Daniel so he shares Stronghold dungeon secrets & speeds Boat #2 repair',
+      ],
+      completed: (powerCount >= 2 && hasHighGear) || bossDone || state.escapedCity,
+    });
+    goals.push({
+      id: 'goal_boat2_chase',
+      title: 'Rebuild Boat #2 & Shatter the Blockade',
+      subtitle: `Slipway repair progress (${boatStages}/4 stages). Daniel will helm the boat across open water while you fight on deck!`,
+      routes: [
+        'Set Daniel to [Help Build] for faster repairs and lower raw timber cost',
+        'Sail past the glowing storm reef to confront The Aura King and clear the skies to Port Solis',
+      ],
+      completed: state.escapedCity || bossDone,
+    });
+  }
+
+  return goals;
 }
 
-export function getActLabel(act: SurvivalState['act']): string {
-  switch (act) {
-    case 1:
-      return 'Act 1 — Washed Ashore';
-    case 2:
-      return 'Act 2 — Making Camp';
-    case 3:
-      return 'Act 3 — Secrets of the Island';
-    case 4:
-      return 'Act 4 — The Escape';
-    case 5:
-      return 'Act 5 — Reaching the City';
+export function evaluateObjectivesForAct(
+  state: SurvivalState,
+  _act: SurvivalState['act'] = state.act
+): ObjectiveStep[] {
+  const open = evaluateOpenGoals(state);
+  return open.map((g, idx) => ({
+    id: g.id,
+    act: Math.min(5, Math.max(1, idx + 1)) as SurvivalState['act'],
+    title: g.title,
+    detail: g.subtitle,
+    progressText: g.completed ? 'Ready' : g.optional ? 'Optional' : 'Active',
+    completed: g.completed,
+  }));
+}
+
+export function getActLabel(act: SurvivalState['act'], storyPhase?: StoryPhase): string {
+  switch (storyPhase) {
+    case 'alone':
+      return 'Adrift Alone — Find Fire, Answers & Escape';
+    case 'found_daniel':
+      return 'Two Survivors — Explore & Attempt Escape';
+    case 'boat_attempted':
+    case 'preparing':
+      return 'Rebuilding & Empowering — Challenge the Aura King';
+    case 'final_boat_chase':
+      return 'Final Storm Chase — Shatter the Blockade';
+    case 'escaped':
+      return 'Horizon Clear — Arrived at Port Solis';
+    default:
+      if (act === 5) return 'Open Horizon — Port Solis';
+      if (act === 4) return 'The Escape — Preparing Vessel';
+      return 'Open Survival — Island Freedoms';
   }
 }
 
@@ -715,8 +826,30 @@ export function computeMilestones(state: SurvivalState): SurvivalMilestone[] {
     {
       id: 'ms_dethroned',
       title: 'Dethroned the Aura King',
-      description: 'Defeated The Aura King in battle and broke the storm gripping the island.',
+      description: 'Defeated The Aura King on the storm chase and cleared the skies to Port Solis.',
       unlocked: Boolean(state.boss?.defeated || state.flags?.boss_lavans_defeated),
+    },
+    {
+      id: 'ms_daniel_bond',
+      title: 'Unlikely Brothers',
+      description: 'Earned Daniel’s deep trust in the caves and worked side-by-side.',
+      unlocked: Boolean(state.companion?.found && state.companion.trust >= 60),
+    },
+    {
+      id: 'ms_all_powers',
+      title: 'Touched by the Relics',
+      description: 'Awakened all four Island Relic Shrines (Ward, Dash, Cleave & Sight).',
+      unlocked: (state.powers?.unlocked?.length ?? 0) >= 4,
+    },
+    {
+      id: 'ms_stronghold_heist',
+      title: 'Caldera Burglar',
+      description: 'Stole Stronghold weaponry or broke out of the Stronghold Dungeon.',
+      unlocked: Boolean(
+        state.stronghold?.stolenRifle ||
+          state.stronghold?.stolenHarpoon ||
+          state.flags?.escaped_stronghold_prison
+      ),
     },
   ];
 }

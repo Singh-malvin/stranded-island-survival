@@ -24,7 +24,30 @@ import {
   retryBossFromCheckpoint,
   setBossCombatPhase,
   startBossEncounter,
+  startFinalSeaChase,
 } from './boss.ts';
+import {
+  damageDaniel,
+  discoverDaniel,
+  issueDanielCommand,
+  reviveDaniel,
+  tickDanielSimulation,
+  treatDaniel,
+} from './companion.ts';
+import {
+  activatePower,
+  getIncomingAuraDamageMult,
+  tickPowers,
+  unlockShrinePower,
+} from './powers.ts';
+import {
+  attemptPrisonEscape,
+  capturePlayerToPrison,
+  computeStealthVisibility,
+  recoverEvidenceLocker,
+  stealStrongholdItem,
+  tickAuraKingAI,
+} from './auraAI.ts';
 import {
   addItem,
   countItem,
@@ -748,31 +771,22 @@ describe('Stage 5 — Spread World, Fall Damage, Gates, Wildlife AI & Act 3 Stat
 describe('Stage 6 — Escape Boat Building, Sea Voyage & Port Solis Arrival', () => {
   it('builds the escape boat sequentially across 4 stages, sails through stopovers & storms to Port Solis (Act 4-5)', () => {
     let state = createInitialSurvivalState('survivor');
-    // Cannot construct boat stages while still in Act < 4
-    const earlyCheck = canBuildBoatStage(state, 'keel_hull');
-    assert.equal(earlyCheck.ok, false);
-
-    // Promote to Act 4 with repaired station and dockyard materials + mixed sea rations
-    state = {
-      ...state,
-      act: 4,
-      stationRepairs: { radio: true, generator: true, chart: true },
-    };
+    // Player-driven: Boat #1 can be constructed freely once materials are gathered without rigid Act gates
     const grants: Array<[Parameters<typeof addItem>[1], number]> = [
       ['log', 8],
       ['plank', 12],
-      ['rope', 12],
+      ['rope', 18],
       ['resin', 6],
-      ['stick', 8],
-      ['cloth_scrap', 6],
-      ['metal_ingot', 6],
-      ['scrap_metal', 4],
-      ['copper_wire', 2],
-      ['circuit_board', 1],
-      ['fuel_can', 2],
-      ['water_bottle_clean', 2],
-      ['dried_fish', 2],
-      ['cooked_meat', 1],
+      ['stick', 16],
+      ['cloth_scrap', 12],
+      ['metal_ingot', 12],
+      ['scrap_metal', 8],
+      ['copper_wire', 4],
+      ['circuit_board', 2],
+      ['fuel_can', 3],
+      ['water_bottle_clean', 4],
+      ['dried_fish', 4],
+      ['cooked_meat', 2],
     ];
     let inv = state.inventory;
     for (const [id, count] of grants) {
@@ -794,12 +808,28 @@ describe('Stage 6 — Escape Boat Building, Sea Voyage & Port Solis Arrival', ()
 
     assert.equal(countBoatStagesComplete(s4.state.boat), 4);
     assert.equal(isBoatReadyToLaunch(s4.state.boat), true);
-    assert.equal(countItem(s4.state.inventory, 'dried_fish'), 0);
-    assert.equal(countItem(s4.state.inventory, 'cooked_meat'), 0);
+    assert.equal(countItem(s4.state.inventory, 'dried_fish'), 1);
+    assert.equal(countItem(s4.state.inventory, 'cooked_meat'), 2);
 
-    // Launch sea voyage toward Stop 1 (Shoal Cay)
-    const launched = launchEscapeVoyage(s4.state);
+    // Fixed Event #2: First launch triggers Boat #1 destruction by The Aura King & regroups Daniel ashore
+    const firstAttempt = launchEscapeVoyage(s4.state);
+    assert.equal(firstAttempt.ok, true);
+    assert.equal(firstAttempt.triggeredBoat1Destruction, true);
+    assert.equal(firstAttempt.state.storyPhase, 'preparing');
+    assert.equal(firstAttempt.state.flags.boat1_destroyed, true);
+    assert.equal(firstAttempt.state.boat.keel_hull, true);
+    assert.equal(firstAttempt.state.boat.mast_sail, false);
+    assert.equal(firstAttempt.state.companion.found, true);
+
+    // Rebuild Boat #2 (mast, engine, provisions) and launch Fixed Event #3 (Final Sea Chase)
+    let rebuild = buildBoatStage(firstAttempt.state, 'mast_sail').state;
+    rebuild = buildBoatStage(rebuild, 'outboard_engine').state;
+    rebuild = buildBoatStage(rebuild, 'nav_provisions').state;
+
+    const launched = launchEscapeVoyage(rebuild);
     assert.equal(launched.ok, true);
+    assert.equal(launched.triggeredBoat1Destruction, false);
+    assert.equal(launched.state.storyPhase, 'final_boat_chase');
     assert.equal(launched.state.voyage.phase, 'sailing');
 
     // Sail/motor Leg 1 until Shoal Cay anchor stopover
@@ -1578,5 +1608,134 @@ describe('Final Boss Showdown — The Aura King, Weapons, Save Migration & Check
     assert.equal(finRes.state.boss.defeated, true);
     assert.ok(finRes.state.achievements.includes(BOSS_TUNING.ACHIEVEMENT_NAME));
     assert.ok(finRes.state.stats.bossFightTimeSec >= 42);
+  });
+});
+
+describe('Non-Linear Story Rework — Daniel AI, 4 Relic Powers, Stronghold Heist & Dungeon Escapes', () => {
+  it('supports discovering Daniel in caves, medical/trust consequences, commands, and non-permanent downed revival', () => {
+    let s = createInitialSurvivalState();
+    assert.equal(s.storyPhase, 'alone');
+    assert.equal(s.companion.found, false);
+
+    const found = discoverDaniel(s);
+    assert.equal(found.newlyFound, true);
+    s = found.state;
+    assert.equal(s.storyPhase, 'found_daniel');
+
+    // Low trust (< 35) refuses risky combat commands
+    const tooEarlyAttack = issueDanielCommand(s, 'attack');
+    assert.equal(tooEarlyAttack.ok, false);
+
+    // Give berries, clean water, and poultice to raise Trust cleanly
+    let inv = s.inventory;
+    inv = addItem(inv, 'berries', 2).inventory;
+    inv = addItem(inv, 'water_bottle_clean', 1).inventory;
+    inv = addItem(inv, 'medicinal_poultice', 2).inventory;
+    s = { ...s, inventory: inv };
+
+    s = treatDaniel(s, 'feed').state;
+    s = treatDaniel(s, 'water').state;
+    s = treatDaniel(s, 'heal').state;
+    assert.ok(s.companion.trust >= 65);
+
+    // High trust accepts all Command Wheel commands and ticks movement/gather
+    const cmdGather = issueDanielCommand(s, 'gather');
+    assert.equal(cmdGather.ok, true);
+    const ticked = tickDanielSimulation(cmdGather.state, 1.0, { gameHoursDelta: 0.1, gatherAccumSec: 16 });
+    assert.ok(ticked.gatheredNote !== null);
+
+    // Non-permanent downed state & revive
+    const hurt = damageDaniel(ticked.state, 500);
+    assert.equal(hurt.companion.downed, true);
+    assert.equal(issueDanielCommand(hurt, 'follow').ok, false);
+    const rev = reviveDaniel(hurt);
+    assert.equal(rev.ok, true);
+    assert.equal(rev.state.companion.downed, false);
+  });
+
+  it('unlocks all 4 Island Relic Powers in arbitrary order with multi-route Sovereign Cleave', () => {
+    let s = createInitialSurvivalState();
+    // Unlock in reverse order without needing clues for Ward, Dash, or Sight
+    s = unlockShrinePower(s, 'aura_sight').state;
+    s = unlockShrinePower(s, 'aura_ward').state;
+    assert.ok(getIncomingAuraDamageMult(s) < 1.0);
+
+    // Sovereign Cleave fails cleanly if neither shard nor Ruins lore present
+    const blocked = unlockShrinePower(s, 'sovereign_cleave');
+    assert.equal(blocked.ok, false);
+
+    // Supply an Aura Shard -> succeeds and consumes 1 shard
+    s = { ...s, inventory: addItem(s.inventory, 'aura_shard', 1).inventory };
+    const cleaved = unlockShrinePower(s, 'sovereign_cleave');
+    assert.equal(cleaved.ok, true);
+    s = cleaved.state;
+    assert.equal(countItem(s.inventory, 'aura_shard'), 0);
+
+    const sightOn = activatePower(s, 'aura_sight');
+    assert.equal(sightOn.ok, true);
+    assert.ok(sightOn.state.powers.activeAuraSightSec > 0);
+    const cooled = tickPowers(sightOn.state, 20);
+    assert.equal(cooled.powers.cooldowns.aura_sight, 0);
+  });
+
+  it('models stealth visibility, Stronghold heist provocation, prison capture, and 4 repeatable escapes', () => {
+    let s = createInitialSurvivalState();
+    const openDay = computeStealthVisibility({ ...s, clock: { ...s.clock, hour: 13 } }, 'stand', true);
+    const proneStormNight = computeStealthVisibility(
+      { ...s, clock: { ...s.clock, hour: 23 }, weather: { kind: 'storm', rain: 0.9, wind: 0.8 } },
+      'prone',
+      false
+    );
+    assert.ok(proneStormNight < openDay * 0.2);
+
+    // Steal Aura-Infused Rifle & Harpoon Gun from Stronghold Armory
+    const steal1 = stealStrongholdItem(s, 'aura_rifle');
+    assert.equal(steal1.ok, true);
+    assert.equal(countItem(steal1.state.inventory, 'aura_rifle'), 1);
+    assert.ok(steal1.state.auraKingAI.suspicion >= 60);
+
+    const steal2 = stealStrongholdItem(steal1.state, 'harpoon_gun');
+    assert.equal(steal2.ok, true);
+    assert.equal(getEquippedWeaponDamage('harpoon_gun', false), COMBAT_TUNING.WEAPON_DAMAGE.harpoon_gun);
+
+    // Capture moves player to prison and confiscates stolen Armory gear to Evidence Locker
+    const captured = capturePlayerToPrison(steal2.state);
+    assert.equal(captured.prison.inPrison, true);
+    assert.equal(countItem(captured.inventory, 'aura_rifle'), 0);
+    assert.ok(captured.prison.confiscatedItems.length >= 2);
+
+    // Route 1: vent_sneak blocks standing, succeeds crouched!
+    assert.equal(attemptPrisonEscape(captured, 'vent_sneak', { stance: 'stand' }).ok, false);
+    const ventOut = attemptPrisonEscape(captured, 'vent_sneak', { stance: 'crouch' });
+    assert.equal(ventOut.ok, true);
+    assert.equal(ventOut.state.prison.inPrison, false);
+
+    // Recover Evidence Locker returns stolen Armory weapons!
+    const recovered = recoverEvidenceLocker(ventOut.state);
+    assert.equal(recovered.ok, true);
+    assert.equal(countItem(recovered.state.inventory, 'aura_rifle'), 1);
+
+    // Repeatable capture #2: fight_out sets temporary high-alert heat; daniel_rescue works when trusted
+    let captured2 = capturePlayerToPrison(recovered.state);
+    captured2 = {
+      ...captured2,
+      companion: { ...captured2.companion, found: true, trust: 75 },
+    };
+    const rescued = attemptPrisonEscape(captured2, 'daniel_rescue');
+    assert.equal(rescued.ok, true);
+    assert.equal(rescued.state.prison.capturedCount, 2);
+
+    const captured3 = capturePlayerToPrison(rescued.state);
+    const brawled = attemptPrisonEscape(captured3, 'fight_out');
+    assert.equal(brawled.ok, true);
+    assert.ok(brawled.state.stronghold.alertLevel >= 60);
+
+    // Final Sea Chase initiator skips shoreline acts directly into Boat #2 chase
+    const chase = startFinalSeaChase(brawled.state, 'normal');
+    assert.equal(chase.storyPhase, 'final_boat_chase');
+    assert.equal(chase.boss.combatPhase, 'phase3_boat');
+    // Touch tickAuraKingAI safely returns without throwing
+    const aiTick = tickAuraKingAI(brawled.state, 0.5, { stance: 'crouch', hasActiveFireNearby: false, gameHoursDelta: 0.01 });
+    assert.equal(aiTick.state.stronghold.guards.length, 3);
   });
 });

@@ -147,8 +147,8 @@ export function generateInitialWildlife(
     [24, 52],
     [-38, -14],
     [8, -22],
-    [WORLD.CAVE_GROTTO_POS.x + 7, WORLD.CAVE_GROTTO_POS.z + 4],
-    [WORLD.CAVE_GROTTO_POS.x - 5, WORLD.CAVE_GROTTO_POS.z - 6],
+    [WORLD.CAVE_GROTTO_POS.x - 11, WORLD.CAVE_GROTTO_POS.z + 7],
+    [WORLD.CAVE_GROTTO_POS.x - 8, WORLD.CAVE_GROTTO_POS.z - 9],
     [WORLD.ANCIENT_RUINS_POS.x - 8, WORLD.ANCIENT_RUINS_POS.z + 6],
     [-28, -72],
   ];

@@ -429,6 +429,64 @@ export function getEquippedWeaponDamage(itemId: string | null | undefined, isHea
     case 'flare_gun':
       base = COMBAT_TUNING.WEAPON_DAMAGE.flare_gun;
       break;
+    case 'aura_rifle':
+      base = COMBAT_TUNING.WEAPON_DAMAGE.aura_rifle;
+      break;
+    case 'harpoon_gun':
+      base = COMBAT_TUNING.WEAPON_DAMAGE.harpoon_gun;
+      break;
+    case 'lockpick':
+      base = COMBAT_TUNING.WEAPON_DAMAGE.lockpick;
+      break;
   }
   return isHeavy ? Math.round(base * COMBAT_TUNING.HEAVY_DAMAGE_MULT) : base;
+}
+
+/**
+ * Initiates Fixed Event #3: Final Sea Chase on Boat #2 once the player clears the outer storm reef.
+ * Removes forced shoreline boss phases so combat & sea escape play smoothly on open ocean with Daniel helming.
+ */
+export function startFinalSeaChase(
+  state: SurvivalState,
+  difficulty: BossDifficulty = state.bossDifficulty ?? 'normal'
+): SurvivalState {
+  const cfg = getBossDifficultyConfig(difficulty);
+  return {
+    ...state,
+    act: 5,
+    storyPhase: 'final_boat_chase',
+    bossDifficulty: difficulty,
+    weather: { kind: 'storm', rain: 0.85, wind: 0.92, override: 'storm' },
+    companion: state.companion.found
+      ? {
+          ...state.companion,
+          downed: false,
+          command: 'build',
+          moodText: 'I’ve got the helm — brace for the outer reef and light him up!',
+        }
+      : state.companion,
+    boss: {
+      combatPhase: 'phase3_boat',
+      phase: 3,
+      difficulty,
+      hp: cfg.maxHp,
+      maxHp: cfg.maxHp,
+      shielded: false,
+      staggeredSec: 0,
+      auraFlaring: true,
+      crystalsAlive: [false, false, false],
+      barrelsIntact: [true, true, true, true],
+      shades: [],
+      fightElapsedSec: 0,
+      checkpointPhase: 3,
+      defeated: false,
+      subtitleText:
+        'THE AURA KING: "You broke my blockade twice?! The storm will tear your hull apart!"',
+    },
+    flags: {
+      ...state.flags,
+      boss_encounter_started: true,
+      final_chase_started: true,
+    },
+  };
 }
