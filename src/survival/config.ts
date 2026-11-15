@@ -1002,3 +1002,48 @@ export const BOSS_TUNING = {
   POOL_PLAYER_PROJECTILES: 12,
   POOL_VFX_PARTICLES: 160,
 } as const;
+
+/** Playable Flight 404 Plane Crash Opening Sequence timings, camera limits, and cues. */
+export const INTRO_TUNING = {
+  /** Stage durations in seconds (total ~105s = 1.75 min playable intro). */
+  CALM_DURATION_SEC: 26,
+  STORM_DURATION_SEC: 36,
+  BREAKUP_CABIN_SEC: 9,
+  CRASH_VIDEO_SEC: 9,
+  IMPACT_BLACKOUT_SEC: 5,
+  WAKEUP_DURATION_SEC: 18,
+  /** Derived cumulative phase timestamps. */
+  get STORM_START_SEC() {
+    return this.CALM_DURATION_SEC;
+  },
+  get BREAKUP_START_SEC() {
+    return this.CALM_DURATION_SEC + this.STORM_DURATION_SEC;
+  },
+  get VIDEO_START_SEC() {
+    return this.BREAKUP_START_SEC + this.BREAKUP_CABIN_SEC;
+  },
+  get BLACKOUT_START_SEC() {
+    return this.VIDEO_START_SEC + this.CRASH_VIDEO_SEC;
+  },
+  get WAKEUP_START_SEC() {
+    return this.BLACKOUT_START_SEC + this.IMPACT_BLACKOUT_SEC;
+  },
+  get TOTAL_DURATION_SEC() {
+    return this.WAKEUP_START_SEC + this.WAKEUP_DURATION_SEC;
+  },
+  /** Key dramatic beats inside Stage B (relative to intro elapsedSec). */
+  OXYGEN_DROP_SEC: 34,
+  OVERHEAD_BIN_OPEN_SEC: 41,
+  BULKHEAD_SPARK_SEC: 47,
+  /** Hold Spacebar duration (seconds) to skip the intro cleanly. */
+  SKIP_HOLD_SEC: 1.0,
+  /** Seated window seat 4A eye position inside flight404_cabin.glb (Three.js Y-up space). */
+  CABIN_EYE_X: -0.96,
+  CABIN_EYE_Y: 1.24,
+  CABIN_EYE_Z: 0.78,
+  CABIN_LOOK_MAX_YAW_RAD: 1.55,
+  CABIN_LOOK_MAX_PITCH_RAD: 0.56,
+  /** Wake-up eye position & facing direction toward Flight 404 beach wreckage. */
+  WAKE_START_EYE_HEIGHT_M: 0.36,
+  WAKE_YAW_FACING_WRECK: -0.58,
+} as const;

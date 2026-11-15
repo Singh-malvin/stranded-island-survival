@@ -14,6 +14,8 @@ import {
   ScenePerformanceMetrics,
   SurvivalScene3D,
 } from './scene/SurvivalScene3D.ts';
+import { IntroOverlayState } from './scene/PlaneCrashIntro3D.ts';
+import { IntroOverlay } from './ui/IntroOverlay.tsx';
 import {
   BOSS_TUNING,
   HUD_TUNING,
@@ -207,6 +209,21 @@ export default function App() {
     bossStaggered: false,
     bossSubtitle: null,
   });
+  const [introOverlay, setIntroOverlay] = useState<IntroOverlayState>({
+    active: false,
+    stage: 'inactive',
+    elapsedSec: 0,
+    subtitle: null,
+    bannerTitle: null,
+    bannerSubtitle: null,
+    showVideo: false,
+    fadeBlackAlpha: 0,
+    blurPx: 0,
+    skipHoldProgress: 0,
+    lightningFlashAlpha: 0,
+  });
+  const introActiveRef = useRef<boolean>(false);
+  introActiveRef.current = introOverlay.active;
 
   const statusTimerRef = useRef<number>(0);
   const saveBadgeTimerRef = useRef<number>(0);
@@ -771,6 +788,7 @@ export default function App() {
     setGraphicsQuality(scene.getQuality());
     setExtSettings(scene.getExtendedGraphicsSettings());
     scene.syncState(stateRef.current);
+    scene.setIntroUpdateHandler((ov) => setIntroOverlay(ov));
 
     scene.setStanceBlockedCallback((reason) => showStatus(reason));
     scene.setActionAudioCallbacks({
@@ -1013,6 +1031,7 @@ export default function App() {
 
       const scene = sceneRef.current;
       if (!scene) return;
+      if (introActiveRef.current) return;
 
       const runtime = scene.getPlayerRuntimeSnapshot();
       const nextHud = scene.getCombatHudStatus();
@@ -1333,6 +1352,16 @@ export default function App() {
         if (e.code === 'Escape') {
           e.preventDefault();
           closeAllMenusAndLock({ relockPointer: true });
+        }
+        return;
+      }
+
+      if (introActiveRef.current) {
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          sceneRef.current?.setUiBlocked(true);
+          sceneRef.current?.unlockPointer();
+          setIsPaused(true);
         }
         return;
       }
@@ -1873,8 +1902,12 @@ export default function App() {
     setIsPaused(false);
     setShowControlsHint(true);
     setScreen('playing');
-    sceneRef.current?.snapPlayerToGround(fresh.player.x, fresh.player.z, fresh.player.yaw);
-    showStatus('Washed ashore beside Flight 404. Inspect the wing manifest and gather materials.');
+    sceneRef.current?.startPlaneCrashIntro({
+      preserveState: false,
+      onComplete: () => {
+        showStatus('Washed ashore beside Flight 404. Inspect the wing manifest and gather materials.');
+      },
+    });
   };
 
   const handleRespawn = () => {
@@ -1952,6 +1985,7 @@ export default function App() {
           onChangeGraphicsQuality={handleChangeGraphicsQuality}
           onChangeExtendedSettings={handleChangeExtendedSettings}
           onContinue={() => {
+            sceneRef.current?.skipPlaneCrashIntro();
             setScreen('playing');
             sceneRef.current?.setUiBlocked(false);
           }}
@@ -1959,7 +1993,9 @@ export default function App() {
         />
       )}
 
-      {screen === 'playing' && (
+      {screen === 'playing' && <IntroOverlay intro={introOverlay} />}
+
+      {screen === 'playing' && !introOverlay.active && (
         <SurvivalHUD
           state={gameState}
           playerContext={playerContext}
@@ -2151,6 +2187,11 @@ export default function App() {
         onChangeBossDifficulty={handleChangeBossDifficulty}
         onResume={() => closeAllMenusAndLock({ relockPointer: true })}
         onSaveGame={() => commitAndSave(stateRef.current, 'autosave', 'Game Saved')}
+        onReplayIntro={() => {
+          closeAllMenusAndLock({ relockPointer: false });
+          setIsPaused(false);
+          sceneRef.current?.startPlaneCrashIntro({ preserveState: true });
+        }}
         onQuitToTitle={() => {
           commitAndSave(stateRef.current, 'autosave', 'Game Saved');
           closeAllMenusAndLock({ relockPointer: false });

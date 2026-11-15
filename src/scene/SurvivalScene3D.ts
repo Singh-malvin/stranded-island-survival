@@ -24,6 +24,7 @@ import {
   FORGE_TUNING,
   GRAPHICS_TUNING,
   IK_SWAY_TUNING,
+  INTRO_TUNING,
   MOVEMENT_TUNING,
   NEEDS,
   PART5_IMMERSION_TUNING,
@@ -102,6 +103,7 @@ import {
   setFlipbookFrame,
 } from './GLBModelBank.ts';
 import { FirstPersonIKRig } from './FirstPersonIK.ts';
+import { IntroOverlayState, PlaneCrashIntro3D } from './PlaneCrashIntro3D.ts';
 import {
   EuphoriaOutputs,
   EuphoriaPhysicsController,
@@ -496,6 +498,9 @@ export class SurvivalScene3D {
   private bloodLevel: number = 0;
   private lastKnownHp: number = 100;
   private holdInteractProgress: number = 0;
+  private planeIntro: PlaneCrashIntro3D;
+  private onIntroUpdateCb?: (overlay: IntroOverlayState) => void;
+  private introPreWakePos: { x: number; z: number; yaw: number } | null = null;
   private photoMode: boolean = false;
   private photoFilter: number = 0;
   private photoSavedCam: { x: number; y: number; z: number; pitch: number; yaw: number } | null =
@@ -627,6 +632,7 @@ export class SurvivalScene3D {
     const aspect = container.clientWidth / Math.max(1, container.clientHeight);
     this.camera = new THREE.PerspectiveCamera(68, aspect, 0.08, 780);
     this.camera.position.copy(this.playerPos);
+    this.planeIntro = new PlaneCrashIntro3D(aspect);
 
     // Dual-Arm First-person Rigs
     this.toolRig = new THREE.Group();
@@ -2617,6 +2623,61 @@ export class SurvivalScene3D {
       bumpedGate,
       fps: this.fpsValue,
     };
+  }
+
+  public setIntroUpdateHandler(cb: (overlay: IntroOverlayState) => void) {
+    this.onIntroUpdateCb = cb;
+  }
+
+  public startPlaneCrashIntro(opts: { preserveState?: boolean; onComplete?: () => void } = {}) {
+    const preserve = Boolean(opts.preserveState);
+    if (preserve) {
+      this.introPreWakePos = { x: this.playerPos.x, z: this.playerPos.z, yaw: this.yaw };
+    } else {
+      this.introPreWakePos = null;
+    }
+    this.setUiBlocked(false);
+    this.planeIntro.start({
+      preserveState: preserve,
+      onWakeUpStart: (wasPreserved) => {
+        if (wasPreserved && this.introPreWakePos) {
+          this.snapPlayerToGround(
+            this.introPreWakePos.x,
+            this.introPreWakePos.z,
+            this.introPreWakePos.yaw
+          );
+          return;
+        }
+        this.snapPlayerToGround(
+          WORLD.PLAYER_SPAWN.x,
+          WORLD.PLAYER_SPAWN.z,
+          INTRO_TUNING.WAKE_YAW_FACING_WRECK
+        );
+        this.pitch = -0.18;
+        this.targetPitch = -0.18;
+      },
+      onComplete: () => {
+        this.targetPitch = 0.04;
+        this.onIntroUpdateCb?.({
+          active: false,
+          stage: 'inactive',
+          elapsedSec: 0,
+          subtitle: null,
+          bannerTitle: null,
+          bannerSubtitle: null,
+          showVideo: false,
+          fadeBlackAlpha: 0,
+          blurPx: 0,
+          skipHoldProgress: 0,
+          lightningFlashAlpha: 0,
+        });
+        opts.onComplete?.();
+      },
+    });
+  }
+
+  public skipPlaneCrashIntro() {
+    this.planeIntro.skipImmediately();
   }
 
   public getPlayerYaw(): number {
@@ -5219,6 +5280,19 @@ export class SurvivalScene3D {
 
     this.playerPos.y =
       this.playerFootY + this.currentEyeHeight + euphoriaOut.cameraDipOffset - dodgeDip;
+    if (this.planeIntro.active && this.planeIntro.isInIslandWakeUp()) {
+      const wp = this.planeIntro.getWakeUpProgress();
+      const wakeEase = 1 - Math.pow(1 - wp, 2.2);
+      this.playerPos.y =
+        this.playerFootY +
+        THREE.MathUtils.lerp(
+          INTRO_TUNING.WAKE_START_EYE_HEIGHT_M,
+          MOVEMENT_TUNING.EYE_HEIGHT_STAND_M,
+          wakeEase
+        );
+      this.pitch = THREE.MathUtils.lerp(-0.22, 0.03, wakeEase);
+      this.targetPitch = this.pitch;
+    }
     const camCleared = clampCameraClearance(
       this.playerPos.x + _right.x * headBobSide + shakeX,
       this.playerPos.y + headBobY + shakeY,
@@ -6251,6 +6325,14 @@ export class SurvivalScene3D {
       return;
     }
 
+    if (this.planeIntro.active) {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        this.planeIntro.setSkipHeld(true);
+      }
+      return;
+    }
+
     if (this.sleepPhase !== 'none') return;
 
     if (e.code === this.getKeybind('crouch') && !e.repeat) {
@@ -6329,6 +6411,9 @@ export class SurvivalScene3D {
 
   private onKeyUp = (e: KeyboardEvent) => {
     this.keys[e.code] = false;
+    if (this.planeIntro.active && e.code === 'Space') {
+      this.planeIntro.setSkipHeld(false);
+    }
     if (e.code === this.getKeybind('block')) {
       this.isBlocking = false;
     }
@@ -6359,6 +6444,7 @@ export class SurvivalScene3D {
     if (!this.isPointerLocked && document.pointerLockElement !== canvas) {
       this.lockPointer();
     }
+    if (this.planeIntro.active) return;
 
     if (this.hoveredTarget || this.buildPreviewType !== null) {
       const k = this.hoveredTarget?.kind;
@@ -6386,6 +6472,10 @@ export class SurvivalScene3D {
       const my = THREE.MathUtils.clamp(e.movementY, -80, 80);
       const dYaw = -mx * 0.0024 * sens;
       const dPitch = -my * 0.0024 * sens;
+      if (this.planeIntro.active && !this.planeIntro.isInIslandWakeUp()) {
+        this.planeIntro.addLookDelta(dYaw, dPitch);
+        return;
+      }
       this.targetYaw += dYaw;
       this.targetPitch = Math.max(-Math.PI / 2.3, Math.min(Math.PI / 2.3, this.targetPitch + dPitch));
       this.frameLookYawDelta += dYaw;
@@ -6405,6 +6495,12 @@ export class SurvivalScene3D {
       const dy = e.clientY - this.lastMouseY;
       const dYaw = -dx * 0.0035 * sens;
       const dPitch = -dy * 0.0035 * sens;
+      if (this.planeIntro.active && !this.planeIntro.isInIslandWakeUp()) {
+        this.planeIntro.addLookDelta(dYaw, dPitch);
+        this.lastMouseX = e.clientX;
+        this.lastMouseY = e.clientY;
+        return;
+      }
       this.targetYaw += dYaw;
       this.targetPitch = Math.max(-Math.PI / 2.3, Math.min(Math.PI / 2.3, this.targetPitch + dPitch));
       this.frameLookYawDelta += dYaw;
@@ -6775,6 +6871,7 @@ export class SurvivalScene3D {
     const h = this.container.clientHeight;
     this.camera.aspect = w / Math.max(1, h);
     this.camera.updateProjectionMatrix();
+    this.planeIntro.resize(this.camera.aspect);
     this.renderer.setSize(w, h);
     this.applyEffectivePixelRatioAndViewDist();
   };
@@ -6971,6 +7068,32 @@ export class SurvivalScene3D {
       if (rec.beacon?.visible) {
         rec.beacon.rotation.y += delta * 2.2;
         rec.beacon.position.y = 1.85 + Math.sin(now * 0.004) * 0.14;
+      }
+    }
+
+    if (this.planeIntro.active) {
+      const fwdLean =
+        !this.isUiBlocked
+          ? (this.isActionKey('forward') ? 1 : 0) - (this.isActionKey('back') ? 1 : 0)
+          : 0;
+      const sideLean =
+        !this.isUiBlocked
+          ? (this.isActionKey('right') ? 1 : 0) - (this.isActionKey('left') ? 1 : 0)
+          : 0;
+      const introState = this.planeIntro.update(this.isUiBlocked ? 0 : delta, fwdLean, sideLean);
+      this.onIntroUpdateCb?.(introState);
+      if (introState.active && !this.planeIntro.isInIslandWakeUp()) {
+        this.renderer.render(this.planeIntro.scene, this.planeIntro.camera);
+        if (this.isSoftwareGl) {
+          this.afterDraw(() => {
+            if (!this.isDisposed) {
+              this.frameId = requestAnimationFrame(this.tick);
+            }
+          });
+        } else {
+          this.frameId = requestAnimationFrame(this.tick);
+        }
+        return;
       }
     }
 
@@ -7193,6 +7316,7 @@ export class SurvivalScene3D {
     this.skyDome?.iblSky.material.dispose();
     this.boss3D?.dispose();
     this.boss3D = null;
+    this.planeIntro.dispose();
     this.renderer.dispose();
   }
 }

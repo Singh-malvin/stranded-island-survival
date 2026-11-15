@@ -1517,6 +1517,154 @@ class AudioManager {
       // Headless or speech-blocked fallback handled seamlessly by WebAudio + subtitles
     }
   }
+
+  private introEngineOsc: OscillatorNode | null = null;
+  private introEngineGain: GainNode | null = null;
+
+  public setIntroEngineDrone(intensity: number) {
+    this.initContext();
+    if (!this.ctx || !this.masterGain) return;
+    if (this.isMuted || intensity <= 0.01) {
+      if (this.introEngineGain) {
+        this.introEngineGain.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.15);
+      }
+      return;
+    }
+    if (!this.introEngineOsc || !this.introEngineGain) {
+      const osc = this.ctx.createOscillator();
+      const filter = this.ctx.createBiquadFilter();
+      const gain = this.ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.value = 64;
+      filter.type = 'lowpass';
+      filter.frequency.value = 180;
+      gain.gain.value = 0.0001;
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start();
+      this.introEngineOsc = osc;
+      this.introEngineGain = gain;
+    }
+    this.introEngineOsc.frequency.setTargetAtTime(62 + intensity * 38, this.ctx.currentTime, 0.25);
+    this.introEngineGain.gain.setTargetAtTime(
+      Math.min(0.11, intensity * 0.085),
+      this.ctx.currentTime,
+      0.2
+    );
+  }
+
+  public stopIntroEngineDrone() {
+    if (this.ctx && this.introEngineGain) {
+      this.introEngineGain.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.1);
+    }
+    try {
+      this.introEngineOsc?.stop((this.ctx?.currentTime ?? 0) + 0.15);
+    } catch {
+      // Ignore already-stopped oscillator
+    }
+    this.introEngineOsc = null;
+    this.introEngineGain = null;
+  }
+
+  public playIntroCue(
+    cue: 'chime' | 'thunder' | 'oxygen' | 'alarm' | 'spark' | 'breakup' | 'impact' | 'wakeup'
+  ) {
+    this.initContext();
+    if (!this.ctx || !this.masterGain || this.isMuted) return;
+    const t = this.ctx.currentTime;
+    if (cue === 'chime') {
+      [587.33, 783.99].forEach((freq, i) => {
+        const o = this.ctx!.createOscillator();
+        const g = this.ctx!.createGain();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(freq, t + i * 0.22);
+        g.gain.setValueAtTime(0.12, t + i * 0.22);
+        g.gain.exponentialRampToValueAtTime(0.001, t + i * 0.22 + 0.55);
+        o.connect(g);
+        g.connect(this.masterGain!);
+        o.start(t + i * 0.22);
+        o.stop(t + i * 0.22 + 0.6);
+      });
+    } else if (cue === 'thunder') {
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(92, t);
+      o.frequency.exponentialRampToValueAtTime(34, t + 1.15);
+      g.gain.setValueAtTime(0.22, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 1.25);
+      o.connect(g);
+      g.connect(this.masterGain);
+      o.start(t);
+      o.stop(t + 1.3);
+    } else if (cue === 'oxygen') {
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = 'triangle';
+      o.frequency.setValueAtTime(1180, t);
+      o.frequency.exponentialRampToValueAtTime(420, t + 0.28);
+      g.gain.setValueAtTime(0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.34);
+      o.connect(g);
+      g.connect(this.masterGain);
+      o.start(t);
+      o.stop(t + 0.36);
+    } else if (cue === 'alarm') {
+      [0, 0.34, 0.68].forEach((off) => {
+        const o = this.ctx!.createOscillator();
+        const g = this.ctx!.createGain();
+        o.type = 'square';
+        o.frequency.setValueAtTime(740, t + off);
+        o.frequency.setValueAtTime(520, t + off + 0.14);
+        g.gain.setValueAtTime(0.08, t + off);
+        g.gain.exponentialRampToValueAtTime(0.001, t + off + 0.28);
+        o.connect(g);
+        g.connect(this.masterGain!);
+        o.start(t + off);
+        o.stop(t + off + 0.3);
+      });
+    } else if (cue === 'spark') {
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(1950, t);
+      o.frequency.exponentialRampToValueAtTime(240, t + 0.12);
+      g.gain.setValueAtTime(0.11, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+      o.connect(g);
+      g.connect(this.masterGain);
+      o.start(t);
+      o.stop(t + 0.15);
+    } else if (cue === 'breakup' || cue === 'impact') {
+      const dur = cue === 'impact' ? 1.4 : 0.85;
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(cue === 'impact' ? 115 : 165, t);
+      o.frequency.exponentialRampToValueAtTime(26, t + dur);
+      g.gain.setValueAtTime(cue === 'impact' ? 0.28 : 0.18, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      o.connect(g);
+      g.connect(this.masterGain);
+      o.start(t);
+      o.stop(t + dur + 0.05);
+    } else if (cue === 'wakeup') {
+      // Gentle wave crest swell on Palm Cove beach
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(110, t);
+      o.frequency.linearRampToValueAtTime(145, t + 1.2);
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.linearRampToValueAtTime(0.06, t + 0.7);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 2.4);
+      o.connect(g);
+      g.connect(this.masterGain);
+      o.start(t);
+      o.stop(t + 2.5);
+    }
+  }
 }
 
 export const audio = new AudioManager();

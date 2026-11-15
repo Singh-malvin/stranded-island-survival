@@ -185,6 +185,7 @@ interface PauseModalProps {
   onResume: () => void;
   onSaveGame?: () => void;
   onQuitToTitle?: () => void;
+  onReplayIntro?: () => void;
   onRestart: () => void;
 }
 
@@ -255,6 +256,7 @@ export const SurvivalPauseModal: React.FC<PauseModalProps> = ({
   onResume,
   onSaveGame,
   onQuitToTitle,
+  onReplayIntro,
   onRestart,
 }) => {
   const [pauseView, setPauseView] = useState<'main' | 'controls' | 'settings'>('main');
@@ -707,6 +709,18 @@ export const SurvivalPauseModal: React.FC<PauseModalProps> = ({
                     Captions: {extSettings.closedCaptions ?? true ? 'ON' : 'OFF'}
                   </button>
                 </div>
+
+                {onReplayIntro && (
+                  <div className="border-t border-stone-800 pt-2">
+                    <button
+                      type="button"
+                      onClick={onReplayIntro}
+                      className="flex w-full items-center justify-center gap-1.5 rounded border border-stone-700 bg-stone-950 py-1.5 text-[11px] font-semibold text-amber-200 transition hover:border-amber-400/60 hover:bg-stone-800"
+                    >
+                      <RotateCcw className="h-3.5 w-3.5 text-amber-400" /> Replay Intro
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </div>
